@@ -1,0 +1,141 @@
+add_product:
+  fields:
+    name:
+      required: true
+      example: "Chopped tomatoes"
+      selector:
+        text:
+    stock_unit:
+      required: true
+      example: "tin"
+      selector:
+        text:
+    reorder_level:
+      default: 0
+      selector:
+        number:
+          min: 0
+          step: 0.1
+          mode: box
+    default_location_id:
+      selector:
+        text:
+add_stock:
+  fields:
+    variant_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    location_id:
+      selector:
+        text:
+    best_before_date:
+      selector:
+        date:
+    use_by_date:
+      selector:
+        date:
+    request_key:
+      selector:
+        text:
+use_stock:
+  fields:
+    product_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    variant_id:
+      selector:
+        text:
+    batch_id:
+      selector:
+        text:
+    request_key:
+      selector:
+        text:
+correct_stock:
+  fields:
+    batch_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    reason:
+      selector:
+        text:
+add_shopping_item:
+  fields:
+    product_id:
+      selector:
+        text:
+    custom_name:
+      selector:
+        text:
+    quantity:
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    unit:
+      selector:
+        text:
+complete_shopping_item:
+  fields:
+    item_id:
+      required: true
+      selector:
+        text:
+    variant_id:
+      selector:
+        text:
+    quantity:
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    location_id:
+      selector:
+        text:
+plan_meal:
+  fields:
+    plan_date:
+      required: true
+      selector:
+        date:
+    recipe_id:
+      selector:
+        text:
+    allow_ineligible:
+      default: false
+      selector:
+        boolean:
+shuffle_meal:
+  fields:
+    plan_date:
+      required: true
+      selector:
+        date:
+suggest_meals:
+  fields: {}

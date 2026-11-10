@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dan's Kitchen",
+        "description": "Set up local household inventory and meal planning."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Dan's Kitchen is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dan's Kitchen preferences",
+        "data": {
+          "expiry_warning_days": "Expiry warning period",
+          "external_lookup_enabled": "Allow Open Food Facts barcode lookups"
+        }
+      }
+    }
+  },
+  "services": {
+    "add_product": {
+      "name": "Add product",
+      "description": "Add a generic product to the catalogue."
+    },
+    "add_stock": {
+      "name": "Add stock",
+      "description": "Add stock to a product variant and record an inventory batch."
+    },
+    "use_stock": {
+      "name": "Use stock",
+      "description": "Consume stock by expiry date without allowing negative quantities."
+    },
+    "correct_stock": {
+      "name": "Correct stock",
+      "description": "Set an inventory batch to a verified quantity."
+    },
+    "add_shopping_item": {
+      "name": "Add shopping item",
+      "description": "Add a product or custom item to the shopping list."
+    },
+    "complete_shopping_item": {
+      "name": "Complete shopping item",
+      "description": "Mark an item purchased and optionally add its stock."
+    },
+    "plan_meal": {
+      "name": "Plan meal",
+      "description": "Fix or clear a meal for a calendar date."
+    },
+    "shuffle_meal": {
+      "name": "Shuffle meal",
+      "description": "Suggest a random eligible recipe for one date."
+    },
+    "suggest_meals": {
+      "name": "Suggest meals",
+      "description": "Regenerate random meal assignments in the four-week planner."
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "domain": "dans_kitchen",
+  "name": "Dan's Kitchen",
+  "codeowners": ["@dan-lindley"],
+  "config_flow": true,
+  "dependencies": ["panel_custom", "websocket_api"],
+  "documentation": "https://github.com/dan-lindley/dans-kitchen",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/dan-lindley/dans-kitchen/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
