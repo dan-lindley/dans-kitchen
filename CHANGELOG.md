@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Kept recipe Save and Cancel controls visible while the form content scrolls.
+- Replaced the full inventory ingredient list with a searchable add/remove picker.
+
 ## 0.2.1
 
 - Versioned the Home Assistant panel asset URL so browsers reload the updated

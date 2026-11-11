@@ -82,6 +82,7 @@ export class DansKitchenPanel extends LitElement {
   @state() private appFormError = "";
   @state() private recipeDraft?: RecipeDraft;
   @state() private recipeFormError = "";
+  @state() private recipeIngredientSearch = "";
   private scannerControls?: ScannerControls;
   private scannerStream?: MediaStream;
   private nativeScanFrame = 0;
@@ -159,15 +160,25 @@ export class DansKitchenPanel extends LitElement {
     .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     .detail-grid .wide { grid-column:1/-1; }
     dialog { color:var(--primary-text-color); background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:12px; width:min(580px, calc(100vw - 24px)); max-height:90vh; overflow:auto; padding:16px; }
+    dialog.recipe-dialog { width:min(760px, calc(100vw - 24px)); max-height:calc(100vh - 32px); overflow:hidden; padding:0; }
     dialog::backdrop { background:#0008; }
     .dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; margin-top:14px; }
     dialog[open] { position:fixed; inset:50% auto auto 50%; transform:translate(-50%,-50%); margin:0; box-shadow:0 12px 40px #0004; z-index:10; }
     .app-form, .recipe-form { display:grid; gap:12px; }
     .form-fields { display:grid; gap:10px; }
-    .recipe-form { width:min(760px, calc(100vw - 24px)); }
-    .ingredient-option { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:8px; border-bottom:1px solid var(--divider-color); padding:9px 0; }
-    .ingredient-option input[type=checkbox] { margin-top:4px; }
-    .ingredient-fields { grid-column:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .recipe-form { width:100%; min-width:0; max-height:calc(100vh - 32px); height:min(860px, 90vh); grid-template-rows:auto minmax(0,1fr) auto; gap:0; overflow:hidden; }
+    .recipe-header { margin:0; padding:14px 16px 10px; border-bottom:1px solid var(--divider-color); }
+    .recipe-content { min-height:0; overflow-y:auto; overflow-x:hidden; padding:12px 16px; }
+    .recipe-footer { padding:10px 16px; border-top:1px solid var(--divider-color); background:var(--card-background-color); }
+    .recipe-footer .dialog-actions { margin-top:0; }
+    .ingredient-picker { display:grid; gap:7px; }
+    .ingredient-results { display:grid; gap:5px; max-height:150px; overflow:auto; }
+    .ingredient-result, .ingredient-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .ingredient-result { padding:5px 0 5px 8px; border-bottom:1px solid var(--divider-color); }
+    .ingredient-result button, .ingredient-heading button { padding:5px 9px; }
+    .recipe-ingredient { padding:9px 0; border-bottom:1px solid var(--divider-color); }
+    .ingredient-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:7px; }
+    .recipe-content .detail-grid, .recipe-content label { min-width:0; }
     .weekday-toggle { display:grid; justify-items:center; gap:4px; color:var(--secondary-text-color); font-size:12px; border:1px solid var(--divider-color); border-radius:7px; padding:6px; }
     .weekday-toggle input { min-height:20px; }
     .form-error { color:var(--error-color, #b3261e); }
@@ -729,11 +740,13 @@ export class DansKitchenPanel extends LitElement {
   private async createRecipe(): Promise<void> {
     this.recipeDraft = createRecipeDraft();
     this.recipeFormError = "";
+    this.recipeIngredientSearch = "";
   }
 
   private async editRecipe(recipe: Recipe): Promise<void> {
     this.recipeDraft = createRecipeDraft(recipe);
     this.recipeFormError = "";
+    this.recipeIngredientSearch = "";
   }
 
   private updateRecipeDraft<K extends keyof RecipeDraft>(key: K, value: RecipeDraft[K]): void {
@@ -748,11 +761,40 @@ export class DansKitchenPanel extends LitElement {
     this.updateRecipeDraft("weekdays", [...weekdays].sort((a, b) => a - b));
   }
 
-  private toggleRecipeIngredient(product: Product, enabled: boolean): void {
+  private addRecipeIngredient(product: Product): void {
     if (!this.recipeDraft) return;
-    const ingredients = this.recipeDraft.ingredients.filter((item) => item.productId !== product.id);
-    if (enabled) ingredients.push({ productId: product.id, quantity: "", unit: "", variantId: "", notes: "" });
-    this.updateRecipeDraft("ingredients", ingredients);
+    if (this.recipeDraft.ingredients.some((item) => item.productId === product.id)) return;
+    this.updateRecipeDraft("ingredients", [
+      ...this.recipeDraft.ingredients,
+      { productId: product.id, quantity: "", unit: "", variantId: "", notes: "" },
+    ]);
+    this.recipeIngredientSearch = "";
+  }
+
+  private removeRecipeIngredient(productId: string): void {
+    if (!this.recipeDraft) return;
+    this.updateRecipeDraft(
+      "ingredients",
+      this.recipeDraft.ingredients.filter((item) => item.productId !== productId),
+    );
+  }
+
+  private get recipeIngredientMatches(): Product[] {
+    const query = this.recipeIngredientSearch.trim().toLocaleLowerCase();
+    if (!query) return [];
+    return (this.snapshot?.inventory ?? [])
+      .filter((product) => !this.recipeDraft?.ingredients.some((item) => item.productId === product.id))
+      .filter((product) => [
+        product.name,
+        product.stock_unit,
+        ...product.variants.flatMap((variant) => [
+          variant.brand_name ?? "",
+          variant.variant_name ?? "",
+          variant.barcode ?? "",
+        ]),
+      ].some((value) => value.toLocaleLowerCase().includes(query)))
+      .sort((a, b) => a.name.localeCompare(b.name, "en-GB"))
+      .slice(0, 8);
   }
 
   private updateRecipeIngredient(
@@ -785,6 +827,12 @@ export class DansKitchenPanel extends LitElement {
     } finally {
       this.working = false;
     }
+  }
+
+  private closeRecipeEditor(): void {
+    this.recipeDraft = undefined;
+    this.recipeFormError = "";
+    this.recipeIngredientSearch = "";
   }
 
   private async duplicateRecipe(): Promise<void> {
@@ -915,7 +963,7 @@ export class DansKitchenPanel extends LitElement {
         <p>Database schema v${String(this.snapshot!.database.schema_version ?? "—")} · ${String(this.snapshot!.database.integrity ?? "unknown")} · ${Number(this.snapshot!.database.size_bytes ?? 0).toLocaleString("en-GB")} bytes</p>
         <div class="actions"><button class="secondary" @click=${() => this.exportJson()}>Export JSON</button><button class="secondary" @click=${() => this.exportCsv("products")}>Export products CSV</button><button class="secondary" @click=${() => this.exportCsv("stock_transactions")}>Export history CSV</button><button class="secondary" @click=${() => this.showBackups()}>Restore validated backup</button></div>
       </section>
-      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.2.1 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
+      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.2.2 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
   }
 
   private settingNumber(key: string, label: string, value: number | string, min: number, max: number, optional = false) {
@@ -999,57 +1047,70 @@ export class DansKitchenPanel extends LitElement {
 
   private renderRecipeEditor() {
     const draft = this.recipeDraft!;
-    return html`<dialog open aria-modal="true" aria-label=${draft.recipeId ? "Edit recipe" : "Add recipe"}>
+    return html`<dialog class="recipe-dialog" open aria-modal="true" aria-label=${draft.recipeId ? "Edit recipe" : "Add recipe"}>
       <form class="recipe-form" novalidate @submit=${(event: Event) => { event.preventDefault(); void this.saveRecipe(); }}>
-        <div class="section-heading"><div><h2>${draft.recipeId ? "Edit recipe" : "Add recipe"}</h2><p class="subtle">Name, effort, cooking time and eligible weekdays are required.</p></div>
-          <button type="button" class="secondary" @click=${() => { this.recipeDraft = undefined; this.recipeFormError = ""; }}>Close</button></div>
-        <div class="detail-grid">
-          <label class="wide">Recipe name<input type="text" required .value=${draft.name} @input=${(event: Event) => this.updateRecipeDraft("name", (event.currentTarget as HTMLInputElement).value)}></label>
-          <label>Effort<select required .value=${draft.effort} @change=${(event: Event) => this.updateRecipeDraft("effort", (event.currentTarget as HTMLSelectElement).value as RecipeDraft["effort"])}>
-            <option value="" disabled>Choose effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
-          </select></label>
-          <label>Cooking time (minutes)<input type="number" min="0" max="1440" step="1" required .value=${draft.cookingMinutes} @input=${(event: Event) => this.updateRecipeDraft("cookingMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-          <label>Preparation time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-          <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
-          <label class="wide">Cooking instructions (optional)<textarea .value=${draft.instructions} @input=${(event: Event) => this.updateRecipeDraft("instructions", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
-          <div class="wide"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small>
-            <div class="weekdays">${WEEKDAY_NAMES.map((name, day) => {
-              const eligible = draft.weekdays.includes(day);
-              return html`<label class="weekday-toggle"><span>${name}</span><input type="checkbox" aria-label=${`${name} eligibility`} .checked=${eligible}
-                @change=${(event: Event) => this.toggleRecipeWeekday(day, (event.currentTarget as HTMLInputElement).checked)}><small>${eligible ? "On" : "Off"}</small></label>`;
-            })}</div></div>
-          <div class="wide"><strong>Ingredients (optional)</strong>
-            ${this.snapshot?.inventory.length ? this.snapshot.inventory.map((product) => {
-              const ingredient = draft.ingredients.find((item) => item.productId === product.id);
-              return html`<div class="ingredient-option">
-                <input type="checkbox" aria-label=${`Include ${product.name}`} .checked=${Boolean(ingredient)}
-                  @change=${(event: Event) => this.toggleRecipeIngredient(product, (event.currentTarget as HTMLInputElement).checked)}>
-                <strong>${product.name}</strong>
-                ${ingredient ? html`<div class="ingredient-fields">
-                  <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
-                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
-                  <label>Unit (optional)<input type="text" .value=${ingredient.unit || product.stock_unit}
-                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
-                  <label>Exact product variant (optional)<select .value=${ingredient.variantId}
-                    @change=${(event: Event) => this.updateRecipeIngredient(product.id, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
-                    <option value="">Any variant</option>${product.variants.map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
-                  </select></label>
-                  <label>Notes (optional)<input type="text" .value=${ingredient.notes}
-                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
-                </div>` : nothing}
-              </div>`;
-            }) : html`<p class="subtle">Add products in My Kitchen to include optional ingredients.</p>`}
+        <div class="section-heading recipe-header"><div><h2>${draft.recipeId ? "Edit recipe" : "Add recipe"}</h2><p class="subtle">Name, effort, cooking time and eligible weekdays are required.</p></div>
+          <button type="button" class="secondary" @click=${() => this.closeRecipeEditor()}>Close</button></div>
+        <div class="recipe-content">
+          <div class="detail-grid">
+            <label class="wide">Recipe name<input type="text" required .value=${draft.name} @input=${(event: Event) => this.updateRecipeDraft("name", (event.currentTarget as HTMLInputElement).value)}></label>
+            <label>Effort<select required .value=${draft.effort} @change=${(event: Event) => this.updateRecipeDraft("effort", (event.currentTarget as HTMLSelectElement).value as RecipeDraft["effort"])}>
+              <option value="" disabled>Choose effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+            </select></label>
+            <label>Cooking time (minutes)<input type="number" min="0" max="1440" step="1" required .value=${draft.cookingMinutes} @input=${(event: Event) => this.updateRecipeDraft("cookingMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
+            <label>Preparation time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
+            <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+            <label class="wide">Cooking instructions (optional)<textarea .value=${draft.instructions} @input=${(event: Event) => this.updateRecipeDraft("instructions", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+            <div class="wide"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small>
+              <div class="weekdays">${WEEKDAY_NAMES.map((name, day) => {
+                const eligible = draft.weekdays.includes(day);
+                return html`<label class="weekday-toggle"><span>${name}</span><input type="checkbox" aria-label=${`${name} eligibility`} .checked=${eligible}
+                  @change=${(event: Event) => this.toggleRecipeWeekday(day, (event.currentTarget as HTMLInputElement).checked)}><small>${eligible ? "On" : "Off"}</small></label>`;
+              })}</div></div>
+            <div class="wide ingredient-picker"><strong>Ingredients (optional)</strong>
+              <label>Search products to add<input type="search" .value=${this.recipeIngredientSearch} placeholder="Type a product name, brand or barcode"
+                @input=${(event: Event) => { this.recipeIngredientSearch = (event.currentTarget as HTMLInputElement).value; }}></label>
+              ${this.recipeIngredientSearch.trim() ? this.recipeIngredientMatches.length
+                ? html`<div class="ingredient-results" aria-label="Ingredient search results">${this.recipeIngredientMatches.map((product) => html`
+                    <div class="ingredient-result"><span><strong>${product.name}</strong><small> · ${product.stock_unit}</small></span>
+                      <button type="button" class="secondary" @click=${() => this.addRecipeIngredient(product)}>Add</button></div>`)}</div>`
+                : html`<p class="subtle" role="status">No matching products found.</p>`
+                : html`<small class="subtle">Search your products, then add ingredients to this recipe.</small>`}
+            </div>
+            <div class="wide"><strong>Added ingredients</strong>
+              ${draft.ingredients.length ? draft.ingredients.map((ingredient) => {
+                const product = this.snapshot?.inventory.find((item) => item.id === ingredient.productId);
+                return html`<div class="recipe-ingredient">
+                  <div class="ingredient-heading"><strong>${product?.name ?? "Unavailable product"}</strong>
+                    <button type="button" class="secondary" @click=${() => this.removeRecipeIngredient(ingredient.productId)}>Remove</button></div>
+                  <div class="ingredient-fields">
+                    <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
+                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
+                    <label>Unit (optional)<input type="text" .value=${ingredient.unit || product?.stock_unit || ""}
+                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
+                    <label>Exact product variant (optional)<select .value=${ingredient.variantId}
+                      @change=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
+                      <option value="">Any variant</option>${(product?.variants ?? []).map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
+                    </select></label>
+                    <label>Notes (optional)<input type="text" .value=${ingredient.notes}
+                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
+                  </div>
+                </div>`;
+              }) : html`<p class="subtle">No ingredients added.</p>`}
+            </div>
           </div>
         </div>
-        ${this.recipeFormError ? html`<p class="form-error" role="alert">${this.recipeFormError}</p>` : nothing}
-        <div class="dialog-actions">
+        <div class="recipe-footer">
+          ${this.recipeFormError ? html`<p class="form-error" role="alert">${this.recipeFormError}</p>` : nothing}
+          <div class="dialog-actions">
           ${draft.recipeId ? html`<button type="button" class="secondary" @click=${() => this.duplicateRecipe()}>Duplicate</button>
             <button type="button" class="secondary danger" @click=${() => {
               const recipe = this.snapshot?.recipes.find((item) => item.id === draft.recipeId);
               if (recipe) void this.archiveRecipe(recipe);
             }}>Archive</button>` : nothing}
-          <button type="button" class="secondary" @click=${() => { this.recipeDraft = undefined; this.recipeFormError = ""; }}>Cancel</button>
+          <button type="button" class="secondary" @click=${() => this.closeRecipeEditor()}>Cancel</button>
           <button type="submit" ?disabled=${this.working}>${this.working ? "Saving…" : "Save recipe"}</button>
+          </div>
         </div>
       </form>
     </dialog>`;

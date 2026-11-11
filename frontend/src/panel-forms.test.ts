@@ -5,7 +5,18 @@ import type { KitchenSnapshot } from "./types";
 import "./panel";
 
 const emptySnapshot: KitchenSnapshot = {
-  inventory: [],
+  inventory: [{
+    id: "green-lentils",
+    name: "Green lentils",
+    stock_unit: "tin",
+    stock_quantity: 0,
+    reorder_level: 0,
+    default_location_id: null,
+    default_location_name: null,
+    nearest_expiry: null,
+    low_stock: false,
+    variants: [],
+  }],
   recipes: [],
   planner: { weeks: [], start_date: "2026-11-09" },
   shopping: [],
@@ -87,6 +98,13 @@ describe("application forms", () => {
 
     const form = panel.shadowRoot!.querySelector('dialog[aria-label="Add recipe"] form');
     expect(form).not.toBeNull();
+    const footer = form!.querySelector(".recipe-footer");
+    const content = form!.querySelector(".recipe-content");
+    expect(footer).not.toBeNull();
+    expect(content).not.toBeNull();
+    expect(content!.contains(footer)).toBe(false);
+    expect(footer!.textContent).toContain("Save recipe");
+    expect(footer!.textContent).toContain("Cancel");
     expect(form!.textContent).toContain("Recipe name");
     expect(form!.textContent).toContain("Effort");
     expect(form!.textContent).toContain("Cooking time");
@@ -99,8 +117,18 @@ describe("application forms", () => {
     expect(weekdays.every((weekday) => weekday.checked)).toBe(true);
     expect([...form!.querySelectorAll(".weekday-toggle small")].map((item) => item.textContent))
       .toEqual(Array(7).fill("On"));
-    expect(form!.textContent).toContain("Save recipe");
-    expect(form!.textContent).toContain("Cancel");
+    const ingredientSearch = form!.querySelector<HTMLInputElement>('input[type="search"]');
+    expect(ingredientSearch?.placeholder).toContain("product name");
+    ingredientSearch!.value = "lentils";
+    ingredientSearch!.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    const addIngredient = [...form!.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Add");
+    expect(addIngredient).toBeDefined();
+    addIngredient!.click();
+    await panel.updateComplete;
+    expect(form!.textContent).toContain("Green lentils");
+    expect(form!.textContent).toContain("Added ingredients");
     const name = form!.querySelector<HTMLInputElement>('input[type="text"][required]')!;
     name.value = "Soup";
     name.dispatchEvent(new Event("input", { bubbles: true }));
