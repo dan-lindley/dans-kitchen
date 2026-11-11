@@ -135,7 +135,7 @@ describe("application forms", () => {
     sectionToggle.click();
     await panel.updateComplete;
     const ingredientSearch = form!.querySelector<HTMLInputElement>('input[type="search"]');
-    expect(ingredientSearch?.placeholder).toContain("product name");
+    expect(ingredientSearch?.placeholder).toContain("free text");
     ingredientSearch!.value = "lentils";
     ingredientSearch!.dispatchEvent(new Event("input", { bubbles: true }));
     await panel.updateComplete;
@@ -146,6 +146,14 @@ describe("application forms", () => {
     await panel.updateComplete;
     expect(form!.textContent).toContain("Green lentils");
     expect(form!.textContent).toContain("Added ingredients");
+    ingredientSearch!.value = "Fresh basil";
+    ingredientSearch!.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(form!.textContent).toContain("No saved products match");
+    form!.querySelector<HTMLButtonElement>(".free-text-ingredient")!.click();
+    await panel.updateComplete;
+    expect(form!.textContent).toContain("Fresh basil");
+    expect(form!.textContent).toContain("Free text · not linked to stock");
     const name = form!.querySelector<HTMLInputElement>('input[type="text"][required]')!;
     name.value = "Soup";
     name.dispatchEvent(new Event("input", { bubbles: true }));

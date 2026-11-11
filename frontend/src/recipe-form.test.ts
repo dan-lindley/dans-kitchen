@@ -43,4 +43,56 @@ describe("recipe form", () => {
       ).error,
     ).toContain("at least one");
   });
+
+  it("serializes free-text ingredients without linking them to inventory", () => {
+    const draft = createRecipeDraft();
+    const result = recipeDraftPayload(
+      {
+        ...draft,
+        name: "Bean soup",
+        effort: "medium",
+        cookingMinutes: "30",
+        ingredients: [{
+          productId: "",
+          ingredientName: "  Cumin  ",
+          quantity: "1",
+          unit: "tsp",
+          variantId: "",
+          notes: "ground",
+        }],
+      },
+      [],
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.payload?.ingredients).toEqual([{
+      product_id: null,
+      ingredient_name: "Cumin",
+      required_variant_id: null,
+      quantity: 1,
+      unit: "tsp",
+      notes: "ground",
+    }]);
+  });
+
+  it("requires a unit when a free-text ingredient has a quantity", () => {
+    const draft = createRecipeDraft();
+    expect(recipeDraftPayload(
+      {
+        ...draft,
+        name: "Bean soup",
+        effort: "medium",
+        cookingMinutes: "30",
+        ingredients: [{
+          productId: "",
+          ingredientName: "Cumin",
+          quantity: "1",
+          unit: "",
+          variantId: "",
+          notes: "",
+        }],
+      },
+      [],
+    ).error).toContain("Enter a unit for Cumin");
+  });
 });

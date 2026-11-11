@@ -167,21 +167,28 @@ export class DansKitchenPanel extends LitElement {
     dialog[open] { position:fixed; inset:50% auto auto 50%; transform:translate(-50%,-50%); margin:0; box-shadow:0 12px 40px #0004; z-index:10; }
     .app-form, .recipe-form { display:grid; gap:12px; }
     .form-fields { display:grid; gap:10px; }
-    .recipe-form { width:100%; min-width:0; max-height:calc(100vh - 32px); height:min(860px, 90vh); grid-template-rows:auto minmax(0,1fr) auto; gap:0; overflow:hidden; }
-    .recipe-header { margin:0; padding:14px 16px 10px; border-bottom:1px solid var(--divider-color); }
-    .recipe-content { min-height:0; overflow-y:auto; overflow-x:hidden; padding:12px 16px; }
-    .recipe-footer { padding:10px 16px; border-top:1px solid var(--divider-color); background:var(--card-background-color); }
+    .recipe-form { display:flex; flex-direction:column; width:100%; min-width:0; max-height:calc(100vh - 32px); gap:0; overflow:hidden; }
+    .recipe-header { flex:0 0 auto; margin:0; padding:14px 18px 12px; border-bottom:1px solid var(--divider-color); }
+    .recipe-content { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:16px 18px; }
+    .recipe-footer { flex:0 0 auto; padding:10px 18px; border-top:1px solid var(--divider-color); background:var(--card-background-color); }
     .recipe-footer .dialog-actions { margin-top:0; }
     .recipe-section-toggle { width:100%; display:flex; justify-content:space-between; align-items:center; gap:12px; text-align:left; padding:10px 12px; }
     .recipe-section-title { display:grid; gap:2px; }
     .recipe-section-chevron { font-size:18px; }
     .recipe-section-content[hidden] { display:none; }
-    .recipe-section-content { padding-top:12px; }
+    .recipe-section-content { padding-top:16px; }
+    .recipe-content .detail-grid { gap:16px 18px; }
+    .recipe-content label { gap:7px; color:var(--primary-text-color); font-size:13px; }
+    .recipe-intro { display:grid; gap:4px; margin-bottom:10px; }
+    .recipe-intro small { line-height:1.45; }
+    .recipe-content .weekday-toggle { color:var(--secondary-text-color); font-size:12px; }
     .ingredient-picker { display:grid; gap:7px; }
     .ingredient-results { display:grid; gap:5px; max-height:150px; overflow:auto; }
     .ingredient-result, .ingredient-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; }
     .ingredient-result { padding:5px 0 5px 8px; border-bottom:1px solid var(--divider-color); }
     .ingredient-result button, .ingredient-heading button { padding:5px 9px; }
+    .ingredient-heading > span { display:grid; gap:3px; }
+    .free-text-ingredient { justify-self:start; }
     .recipe-ingredient { padding:9px 0; border-bottom:1px solid var(--divider-color); }
     .ingredient-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:7px; }
     .recipe-content .detail-grid, .recipe-content label { min-width:0; }
@@ -774,16 +781,27 @@ export class DansKitchenPanel extends LitElement {
     if (this.recipeDraft.ingredients.some((item) => item.productId === product.id)) return;
     this.updateRecipeDraft("ingredients", [
       ...this.recipeDraft.ingredients,
-      { productId: product.id, quantity: "", unit: "", variantId: "", notes: "" },
+      { productId: product.id, ingredientName: "", quantity: "", unit: "", variantId: "", notes: "" },
     ]);
     this.recipeIngredientSearch = "";
   }
 
-  private removeRecipeIngredient(productId: string): void {
+  private addFreeTextRecipeIngredient(): void {
+    if (!this.recipeDraft) return;
+    const ingredientName = this.recipeIngredientSearch.trim();
+    if (!ingredientName) return;
+    this.updateRecipeDraft("ingredients", [
+      ...this.recipeDraft.ingredients,
+      { productId: "", ingredientName, quantity: "", unit: "", variantId: "", notes: "" },
+    ]);
+    this.recipeIngredientSearch = "";
+  }
+
+  private removeRecipeIngredient(index: number): void {
     if (!this.recipeDraft) return;
     this.updateRecipeDraft(
       "ingredients",
-      this.recipeDraft.ingredients.filter((item) => item.productId !== productId),
+      this.recipeDraft.ingredients.filter((_, ingredientIndex) => ingredientIndex !== index),
     );
   }
 
@@ -806,13 +824,13 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private updateRecipeIngredient(
-    productId: string,
+    index: number,
     key: "quantity" | "unit" | "variantId" | "notes",
     value: string,
   ): void {
     if (!this.recipeDraft) return;
-    this.updateRecipeDraft("ingredients", this.recipeDraft.ingredients.map((item) =>
-      item.productId === productId ? { ...item, [key]: value } : item,
+    this.updateRecipeDraft("ingredients", this.recipeDraft.ingredients.map((item, ingredientIndex) =>
+      ingredientIndex === index ? { ...item, [key]: value } : item,
     ));
   }
 
@@ -1066,7 +1084,8 @@ export class DansKitchenPanel extends LitElement {
               <option value="" disabled>Choose effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
             </select></label>
             <label>Cooking time (minutes)<input type="number" min="0" max="1440" step="1" required .value=${draft.cookingMinutes} @input=${(event: Event) => this.updateRecipeDraft("cookingMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-            <div class="wide"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small>
+            <div class="wide">
+              <div class="recipe-intro"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small></div>
               <div class="weekdays">${WEEKDAY_NAMES.map((name, day) => {
                 const eligible = draft.weekdays.includes(day);
                 return html`<label class="weekday-toggle"><span>${name}</span><input type="checkbox" aria-label=${`${name} eligibility`} .checked=${eligible}
@@ -1082,33 +1101,49 @@ export class DansKitchenPanel extends LitElement {
                 <div class="detail-grid">
                   <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
                   <label>Prep time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-                  <div class="wide ingredient-picker"><strong>Ingredients (optional)</strong>
-                    <label>Search products to add<input type="search" .value=${this.recipeIngredientSearch} placeholder="Type a product name, brand or barcode"
-                      @input=${(event: Event) => { this.recipeIngredientSearch = (event.currentTarget as HTMLInputElement).value; }}></label>
-                    ${this.recipeIngredientSearch.trim() ? this.recipeIngredientMatches.length
-                      ? html`<div class="ingredient-results" aria-label="Ingredient search results">${this.recipeIngredientMatches.map((product) => html`
+                  <div class="wide ingredient-picker">
+                    <div class="recipe-intro"><strong>Ingredients (optional)</strong><small class="subtle">Choose a saved product or add any ingredient by name.</small></div>
+                    <label>Search saved products or type an ingredient<input type="search" maxlength="200" .value=${this.recipeIngredientSearch} placeholder="Start typing, then choose a product or add as free text"
+                      @input=${(event: Event) => { this.recipeIngredientSearch = (event.currentTarget as HTMLInputElement).value; }}
+                      @keydown=${(event: KeyboardEvent) => {
+                        if (event.key === "Enter" && !event.isComposing) {
+                          event.preventDefault();
+                          this.addFreeTextRecipeIngredient();
+                        }
+                      }}></label>
+                    ${this.recipeIngredientSearch.trim() ? html`
+                      ${this.recipeIngredientMatches.length
+                        ? html`<div class="ingredient-results" aria-label="Saved product matches">${this.recipeIngredientMatches.map((product) => html`
                           <div class="ingredient-result"><span><strong>${product.name}</strong><small> · ${product.stock_unit}</small></span>
                             <button type="button" class="secondary" @click=${() => this.addRecipeIngredient(product)}>Add</button></div>`)}</div>`
-                      : html`<p class="subtle" role="status">No matching products found.</p>`
-                      : html`<small class="subtle">Search your products, then add ingredients to this recipe.</small>`}
+                        : html`<p class="subtle" role="status">No saved products match. Add this as a free-text ingredient instead.</p>`}
+                      <button type="button" class="secondary free-text-ingredient" @click=${() => this.addFreeTextRecipeIngredient()}>
+                        Add "${this.recipeIngredientSearch.trim()}" as free text
+                      </button>
+                    ` : html`<small class="subtle">Search saved products, or type a name and add it as free text.</small>`}
                   </div>
-                  <div class="wide"><strong>Added ingredients</strong>
+                  <div class="wide">
+                    <div class="recipe-intro"><strong>Added ingredients</strong></div>
                     ${draft.ingredients.length ? draft.ingredients.map((ingredient) => {
-                      const product = this.snapshot?.inventory.find((item) => item.id === ingredient.productId);
+                      const ingredientIndex = draft.ingredients.indexOf(ingredient);
+                      const product = ingredient.productId
+                        ? this.snapshot?.inventory.find((item) => item.id === ingredient.productId)
+                        : undefined;
+                      const displayName = product?.name ?? ingredient.ingredientName ?? "Unavailable product";
                       return html`<div class="recipe-ingredient">
-                        <div class="ingredient-heading"><strong>${product?.name ?? "Unavailable product"}</strong>
-                          <button type="button" class="secondary" @click=${() => this.removeRecipeIngredient(ingredient.productId)}>Remove</button></div>
+                        <div class="ingredient-heading"><span><strong>${displayName}</strong>${!ingredient.productId ? html`<small class="subtle">Free text · not linked to stock</small>` : nothing}</span>
+                          <button type="button" class="secondary" @click=${() => this.removeRecipeIngredient(ingredientIndex)}>Remove</button></div>
                         <div class="ingredient-fields">
                           <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
-                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredientIndex, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
                           <label>Unit (optional)<input type="text" .value=${ingredient.unit || product?.stock_unit || ""}
-                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
-                          <label>Exact product variant (optional)<select .value=${ingredient.variantId}
-                            @change=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
-                            <option value="">Any variant</option>${(product?.variants ?? []).map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
-                          </select></label>
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredientIndex, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
+                          ${product ? html`<label>Exact product variant (optional)<select .value=${ingredient.variantId}
+                            @change=${(event: Event) => this.updateRecipeIngredient(ingredientIndex, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
+                            <option value="">Any variant</option>${product.variants.map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
+                          </select></label>` : nothing}
                           <label>Notes (optional)<input type="text" .value=${ingredient.notes}
-                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredientIndex, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
                         </div>
                       </div>`;
                     }) : html`<p class="subtle">No ingredients added.</p>`}

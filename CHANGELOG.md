@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- Tightened recipe editor height to its content and increased spacing for clearer
+  field labels and controls.
+- Added persistent free-text recipe ingredients alongside saved product links,
+  including safe migration and recipe-shopping-list support.
+
 ## 0.2.3
 
 - Grouped optional recipe details under a collapsible Instructions section while

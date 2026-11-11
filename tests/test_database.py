@@ -1,6 +1,7 @@
 """Schema, transaction, migration, and recovery tests."""
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +19,7 @@ async def test_initial_schema_enables_foreign_keys_and_seeds_locations(tmp_path)
     )
     foreign_keys = await database.async_fetch_one("PRAGMA foreign_keys")
 
-    assert status["schema_version"] == 1
+    assert status["schema_version"] == 2
     assert status["integrity"] == "ok"
     assert [row["name"] for row in locations] == [
         "Cupboard",
@@ -27,6 +28,67 @@ async def test_initial_schema_enables_foreign_keys_and_seeds_locations(tmp_path)
         "Pantry",
     ]
     assert foreign_keys is not None
+
+
+async def test_recipe_ingredient_migration_preserves_existing_product_rows(tmp_path):
+    database_path = tmp_path / "legacy.sqlite3"
+    migration = (
+        Path(__file__).parents[1]
+        / "custom_components"
+        / "dans_kitchen"
+        / "database"
+        / "migrations"
+        / "001_initial.sql"
+    )
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript(migration.read_text(encoding="utf-8"))
+        connection.execute(
+            "INSERT INTO products(id,name,stock_unit,created_at,updated_at) "
+            "VALUES ('product','Beans','tin','now','now')"
+        )
+        connection.execute(
+            "INSERT INTO product_variants(id,product_id,created_at,updated_at) "
+            "VALUES ('variant','product','now','now')"
+        )
+        connection.execute(
+            "INSERT INTO recipes(id,name,cooking_minutes,created_at,updated_at) "
+            "VALUES ('recipe','Bean soup',30,'now','now')"
+        )
+        connection.execute(
+            "INSERT INTO recipe_ingredients(id,recipe_id,product_id,required_variant_id,"
+            "quantity,unit,notes,sort_order) "
+            "VALUES ('ingredient','recipe','product','variant',2,'tin','drained',3)"
+        )
+        connection.execute(
+            "INSERT INTO schema_migrations(version,applied_at) VALUES (1,'now')"
+        )
+        connection.execute("PRAGMA user_version = 1")
+        connection.commit()
+    finally:
+        connection.close()
+
+    database = Database(database_path)
+    await database.async_initialize()
+
+    ingredient = await database.async_fetch_one(
+        "SELECT id,recipe_id,product_id,ingredient_name,required_variant_id,"
+        "quantity,unit,notes,sort_order "
+        "FROM recipe_ingredients WHERE id='ingredient'"
+    )
+    assert ingredient == {
+        "id": "ingredient",
+        "recipe_id": "recipe",
+        "product_id": "product",
+        "ingredient_name": None,
+        "required_variant_id": "variant",
+        "quantity": 2.0,
+        "unit": "tin",
+        "notes": "drained",
+        "sort_order": 3,
+    }
+    assert (await database.async_status())["schema_version"] == 2
 
 
 async def test_foreign_key_and_unique_barcode_constraints(tmp_path):

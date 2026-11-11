@@ -50,6 +50,49 @@ async def test_recipe_updates_cannot_clear_required_fields(kitchen):
         await kitchen.async_update_recipe(recipe["id"], cooking_minutes=None)
 
 
+async def test_free_text_recipe_ingredients_persist_and_create_shopping_items(kitchen):
+    product = await kitchen.async_create_product(name="Beans", stock_unit="tin")
+    recipe = await create_recipe(
+        kitchen,
+        name="Bean and cumin soup",
+        ingredients=[
+            {"product_id": product["id"]},
+            {"ingredient_name": "  Cumin  ", "quantity": 1, "unit": "tsp"},
+        ],
+    )
+
+    product_ingredient, text_ingredient = recipe["ingredients"]
+    assert product_ingredient["product_id"] == product["id"]
+    assert product_ingredient["ingredient_name"] is None
+    assert text_ingredient["product_id"] is None
+    assert text_ingredient["ingredient_name"] == "Cumin"
+    assert text_ingredient["product_name"] == "Cumin"
+    assert await kitchen.db.async_fetch_one(
+        "SELECT id FROM products WHERE name='Cumin'"
+    ) is None
+
+    availability = await kitchen.async_recipe_availability(recipe["id"])
+    assert availability["status"] == "missing"
+    assert availability["ingredients"][1]["tracked"] is False
+    assert availability["ingredients"][1]["available"] is False
+
+    shopping = await kitchen.async_add_recipe_shopping_items(recipe["id"])
+    custom_items = [item for item in shopping["added"] if item["custom_name"] == "Cumin"]
+    assert len(custom_items) == 1
+    assert custom_items[0]["quantity"] == 1
+    assert custom_items[0]["unit"] == "tsp"
+    assert await kitchen.async_add_recipe_shopping_items(recipe["id"]) == {"added": []}
+
+
+async def test_free_text_recipe_ingredient_quantity_requires_a_unit(kitchen):
+    with pytest.raises(DomainError, match="both an ingredient quantity and its unit"):
+        await create_recipe(
+            kitchen,
+            name="Unmeasured cumin",
+            ingredients=[{"ingredient_name": "Cumin", "quantity": 1}],
+        )
+
+
 async def test_incomplete_legacy_recipes_are_not_automatically_eligible(kitchen):
     recipe = await create_recipe(kitchen, name="Legacy recipe")
     await kitchen.db.async_execute(

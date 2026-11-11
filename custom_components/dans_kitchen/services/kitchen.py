@@ -1020,12 +1020,23 @@ class KitchenService:
             if not isinstance(ingredient, dict):
                 raise DomainError("Each ingredient must be an object.")
             product_id = ingredient.get("product_id")
-            product = connection.execute(
-                "SELECT id FROM products WHERE id=? AND active=1", (product_id,)
-            ).fetchone()
-            if not product:
-                raise DomainError("Every recipe ingredient must reference an active product.")
+            ingredient_name = ingredient.get("ingredient_name")
+            if product_id:
+                product = connection.execute(
+                    "SELECT id FROM products WHERE id=? AND active=1", (product_id,)
+                ).fetchone()
+                if not product:
+                    raise DomainError("Every product ingredient must reference an active product.")
+                if ingredient_name:
+                    raise DomainError("Choose either a saved product or a free-text ingredient.")
+                ingredient_name = None
+            else:
+                ingredient_name = _text(ingredient_name, "ingredient name")
+            ingredient["product_id"] = product_id or None
+            ingredient["ingredient_name"] = ingredient_name
             variant_id = ingredient.get("required_variant_id")
+            if variant_id and not product_id:
+                raise DomainError("A free-text ingredient cannot select a product variant.")
             if (
                 variant_id
                 and not connection.execute(
@@ -1082,12 +1093,14 @@ class KitchenService:
         )
         for sort_order, ingredient in enumerate(ingredients):
             connection.execute(
-                "INSERT INTO recipe_ingredients(id,recipe_id,product_id,required_variant_id,quantity,unit,notes,sort_order) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO recipe_ingredients("
+                "id,recipe_id,product_id,ingredient_name,required_variant_id,quantity,unit,notes,sort_order) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     _id(),
                     recipe_id,
-                    ingredient["product_id"],
+                    ingredient.get("product_id"),
+                    ingredient.get("ingredient_name"),
                     ingredient.get("required_variant_id"),
                     ingredient.get("quantity"),
                     ingredient.get("unit"),
@@ -1174,8 +1187,9 @@ class KitchenService:
             )
         ]
         recipe["ingredients"] = await self.db.async_fetch_all(
-            "SELECT i.*,p.name AS product_name,p.stock_unit,v.brand_name,v.variant_name "
-            "FROM recipe_ingredients i JOIN products p ON p.id=i.product_id "
+            "SELECT i.*,COALESCE(p.name,i.ingredient_name) AS product_name,p.stock_unit,"
+            "v.brand_name,v.variant_name FROM recipe_ingredients i "
+            "LEFT JOIN products p ON p.id=i.product_id "
             "LEFT JOIN product_variants v ON v.id=i.required_variant_id "
             "WHERE i.recipe_id=? ORDER BY i.sort_order",
             (recipe_id,),
@@ -1204,6 +1218,23 @@ class KitchenService:
         results = []
         missing = 0
         for ingredient in recipe["ingredients"]:
+            if ingredient["product_id"] is None:
+                missing += 1
+                results.append(
+                    {
+                        "product_id": None,
+                        "product_name": ingredient["ingredient_name"],
+                        "required_variant_id": None,
+                        "available_quantity": 0,
+                        "stock_unit": None,
+                        "required_quantity": ingredient["quantity"],
+                        "required_unit": ingredient["unit"],
+                        "available": False,
+                        "unit_comparable": False,
+                        "tracked": False,
+                    }
+                )
+                continue
             query = (
                 "SELECT COALESCE(SUM(b.quantity),0) AS quantity FROM inventory_batches b "
                 "JOIN product_variants v ON v.id=b.variant_id WHERE v.product_id=?"
@@ -1242,6 +1273,7 @@ class KitchenService:
                     "required_unit": ingredient["unit"],
                     "available": is_available,
                     "unit_comparable": comparable,
+                    "tracked": True,
                 }
             )
         return {
@@ -1802,6 +1834,24 @@ class KitchenService:
         added: list[dict[str, Any]] = []
         for ingredient in availability["ingredients"]:
             if ingredient["available"]:
+                continue
+            if ingredient["product_id"] is None:
+                custom_name = ingredient["product_name"]
+                existing = await self.db.async_fetch_one(
+                    "SELECT id FROM shopping_items WHERE custom_name=? COLLATE NOCASE "
+                    "AND status='needed' AND source='recipe'",
+                    (custom_name,),
+                )
+                if existing:
+                    continue
+                added.append(
+                    await self.async_add_shopping_item(
+                        custom_name=custom_name,
+                        quantity=ingredient["required_quantity"],
+                        unit=ingredient["required_unit"],
+                        source="recipe",
+                    )
+                )
                 continue
             existing = await self.db.async_fetch_one(
                 "SELECT id FROM shopping_items WHERE product_id=? AND status='needed' AND source='recipe' "

@@ -67,7 +67,8 @@ export type Recipe = {
 
 export type RecipeIngredient = {
   id?: string;
-  product_id: string;
+  product_id: string | null;
+  ingredient_name: string | null;
   product_name?: string;
   required_variant_id: string | null;
   quantity: number | null;

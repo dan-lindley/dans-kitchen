@@ -11,6 +11,7 @@ export type RecipeDraft = {
   instructions: string;
   ingredients: Array<{
     productId: string;
+    ingredientName: string;
     quantity: string;
     unit: string;
     variantId: string;
@@ -29,7 +30,8 @@ export function createRecipeDraft(recipe?: Recipe): RecipeDraft {
     description: recipe?.description ?? "",
     instructions: recipe?.instructions ?? "",
     ingredients: (recipe?.ingredients ?? []).map((ingredient) => ({
-      productId: ingredient.product_id,
+      productId: ingredient.product_id ?? "",
+      ingredientName: ingredient.ingredient_name ?? "",
       quantity: ingredient.quantity?.toString() ?? "",
       unit: ingredient.unit ?? "",
       variantId: ingredient.required_variant_id ?? "",
@@ -57,19 +59,30 @@ export function recipeDraftPayload(
 
   const ingredients = [];
   for (const ingredient of draft.ingredients) {
-    const product = products.find((item) => item.id === ingredient.productId);
-    if (!product) return { error: "An ingredient refers to a product that no longer exists." };
-    if (ingredient.quantity && (!Number.isFinite(Number(ingredient.quantity)) || Number(ingredient.quantity) <= 0)) {
-      return { error: `Enter a positive quantity for ${product.name}, or leave it blank.` };
+    const product = ingredient.productId
+      ? products.find((item) => item.id === ingredient.productId)
+      : undefined;
+    const ingredientName = ingredient.ingredientName.trim();
+    if (ingredient.productId && !product) {
+      return { error: "An ingredient refers to a product that no longer exists." };
     }
-    if (ingredient.variantId && !product.variants.some((variant) => variant.id === ingredient.variantId)) {
-      return { error: `Choose a valid product variant for ${product.name}.` };
+    if (!product && !ingredientName) return { error: "Enter an ingredient name." };
+    const displayName = product?.name ?? ingredientName;
+    if (ingredient.quantity && (!Number.isFinite(Number(ingredient.quantity)) || Number(ingredient.quantity) <= 0)) {
+      return { error: `Enter a positive quantity for ${displayName}, or leave it blank.` };
+    }
+    if (ingredient.quantity && !product && !ingredient.unit.trim()) {
+      return { error: `Enter a unit for ${displayName}, or leave the quantity blank.` };
+    }
+    if (ingredient.variantId && (!product || !product.variants.some((variant) => variant.id === ingredient.variantId))) {
+      return { error: `Choose a valid product variant for ${displayName}.` };
     }
     ingredients.push({
-      product_id: ingredient.productId,
-      required_variant_id: ingredient.variantId || null,
+      product_id: product?.id ?? null,
+      ingredient_name: product ? null : ingredientName,
+      required_variant_id: product ? ingredient.variantId || null : null,
       quantity: ingredient.quantity ? Number(ingredient.quantity) : null,
-      unit: ingredient.quantity ? ingredient.unit || product.stock_unit : null,
+      unit: ingredient.quantity ? ingredient.unit || product?.stock_unit || null : null,
       notes: ingredient.notes.trim() || null,
     });
   }
