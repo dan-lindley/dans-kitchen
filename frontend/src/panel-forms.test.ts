@@ -108,7 +108,6 @@ describe("application forms", () => {
     expect(form!.textContent).toContain("Recipe name");
     expect(form!.textContent).toContain("Effort");
     expect(form!.textContent).toContain("Cooking time");
-    expect(form!.textContent).toContain("Cooking instructions (optional)");
     expect(form!.querySelector('input[type="text"][required]')).not.toBeNull();
     expect(form!.querySelector("select[required]")).not.toBeNull();
     expect(form!.querySelector('input[type="number"][required]')).not.toBeNull();
@@ -117,6 +116,24 @@ describe("application forms", () => {
     expect(weekdays.every((weekday) => weekday.checked)).toBe(true);
     expect([...form!.querySelectorAll(".weekday-toggle small")].map((item) => item.textContent))
       .toEqual(Array(7).fill("On"));
+    const sectionToggle = form!.querySelector<HTMLButtonElement>(".recipe-section-toggle")!;
+    const optionalDetails = form!.querySelector<HTMLElement>("#recipe-optional-details")!;
+    expect(sectionToggle.textContent).toContain("Instructions");
+    expect(sectionToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(optionalDetails.hidden).toBe(true);
+    sectionToggle.click();
+    await panel.updateComplete;
+    expect(sectionToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(optionalDetails.hidden).toBe(false);
+    expect(optionalDetails.textContent).toContain("Description (optional)");
+    expect(optionalDetails.textContent).toContain("Prep time (minutes, optional)");
+    expect(optionalDetails.textContent).toContain("Cooking instructions (optional)");
+    sectionToggle.click();
+    await panel.updateComplete;
+    expect(sectionToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(optionalDetails.hidden).toBe(true);
+    sectionToggle.click();
+    await panel.updateComplete;
     const ingredientSearch = form!.querySelector<HTMLInputElement>('input[type="search"]');
     expect(ingredientSearch?.placeholder).toContain("product name");
     ingredientSearch!.value = "lentils";

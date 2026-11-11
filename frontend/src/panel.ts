@@ -83,6 +83,7 @@ export class DansKitchenPanel extends LitElement {
   @state() private recipeDraft?: RecipeDraft;
   @state() private recipeFormError = "";
   @state() private recipeIngredientSearch = "";
+  @state() private recipeDetailsOpen = false;
   private scannerControls?: ScannerControls;
   private scannerStream?: MediaStream;
   private nativeScanFrame = 0;
@@ -171,6 +172,11 @@ export class DansKitchenPanel extends LitElement {
     .recipe-content { min-height:0; overflow-y:auto; overflow-x:hidden; padding:12px 16px; }
     .recipe-footer { padding:10px 16px; border-top:1px solid var(--divider-color); background:var(--card-background-color); }
     .recipe-footer .dialog-actions { margin-top:0; }
+    .recipe-section-toggle { width:100%; display:flex; justify-content:space-between; align-items:center; gap:12px; text-align:left; padding:10px 12px; }
+    .recipe-section-title { display:grid; gap:2px; }
+    .recipe-section-chevron { font-size:18px; }
+    .recipe-section-content[hidden] { display:none; }
+    .recipe-section-content { padding-top:12px; }
     .ingredient-picker { display:grid; gap:7px; }
     .ingredient-results { display:grid; gap:5px; max-height:150px; overflow:auto; }
     .ingredient-result, .ingredient-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; }
@@ -741,12 +747,14 @@ export class DansKitchenPanel extends LitElement {
     this.recipeDraft = createRecipeDraft();
     this.recipeFormError = "";
     this.recipeIngredientSearch = "";
+    this.recipeDetailsOpen = false;
   }
 
   private async editRecipe(recipe: Recipe): Promise<void> {
     this.recipeDraft = createRecipeDraft(recipe);
     this.recipeFormError = "";
     this.recipeIngredientSearch = "";
+    this.recipeDetailsOpen = false;
   }
 
   private updateRecipeDraft<K extends keyof RecipeDraft>(key: K, value: RecipeDraft[K]): void {
@@ -1058,45 +1066,56 @@ export class DansKitchenPanel extends LitElement {
               <option value="" disabled>Choose effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
             </select></label>
             <label>Cooking time (minutes)<input type="number" min="0" max="1440" step="1" required .value=${draft.cookingMinutes} @input=${(event: Event) => this.updateRecipeDraft("cookingMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-            <label>Preparation time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
-            <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
-            <label class="wide">Cooking instructions (optional)<textarea .value=${draft.instructions} @input=${(event: Event) => this.updateRecipeDraft("instructions", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
             <div class="wide"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small>
               <div class="weekdays">${WEEKDAY_NAMES.map((name, day) => {
                 const eligible = draft.weekdays.includes(day);
                 return html`<label class="weekday-toggle"><span>${name}</span><input type="checkbox" aria-label=${`${name} eligibility`} .checked=${eligible}
                   @change=${(event: Event) => this.toggleRecipeWeekday(day, (event.currentTarget as HTMLInputElement).checked)}><small>${eligible ? "On" : "Off"}</small></label>`;
               })}</div></div>
-            <div class="wide ingredient-picker"><strong>Ingredients (optional)</strong>
-              <label>Search products to add<input type="search" .value=${this.recipeIngredientSearch} placeholder="Type a product name, brand or barcode"
-                @input=${(event: Event) => { this.recipeIngredientSearch = (event.currentTarget as HTMLInputElement).value; }}></label>
-              ${this.recipeIngredientSearch.trim() ? this.recipeIngredientMatches.length
-                ? html`<div class="ingredient-results" aria-label="Ingredient search results">${this.recipeIngredientMatches.map((product) => html`
-                    <div class="ingredient-result"><span><strong>${product.name}</strong><small> · ${product.stock_unit}</small></span>
-                      <button type="button" class="secondary" @click=${() => this.addRecipeIngredient(product)}>Add</button></div>`)}</div>`
-                : html`<p class="subtle" role="status">No matching products found.</p>`
-                : html`<small class="subtle">Search your products, then add ingredients to this recipe.</small>`}
-            </div>
-            <div class="wide"><strong>Added ingredients</strong>
-              ${draft.ingredients.length ? draft.ingredients.map((ingredient) => {
-                const product = this.snapshot?.inventory.find((item) => item.id === ingredient.productId);
-                return html`<div class="recipe-ingredient">
-                  <div class="ingredient-heading"><strong>${product?.name ?? "Unavailable product"}</strong>
-                    <button type="button" class="secondary" @click=${() => this.removeRecipeIngredient(ingredient.productId)}>Remove</button></div>
-                  <div class="ingredient-fields">
-                    <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
-                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
-                    <label>Unit (optional)<input type="text" .value=${ingredient.unit || product?.stock_unit || ""}
-                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
-                    <label>Exact product variant (optional)<select .value=${ingredient.variantId}
-                      @change=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
-                      <option value="">Any variant</option>${(product?.variants ?? []).map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
-                    </select></label>
-                    <label>Notes (optional)<input type="text" .value=${ingredient.notes}
-                      @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
+            <div class="wide">
+              <button type="button" class="secondary recipe-section-toggle" aria-expanded=${String(this.recipeDetailsOpen)}
+                aria-controls="recipe-optional-details" @click=${() => { this.recipeDetailsOpen = !this.recipeDetailsOpen; }}>
+                <span class="recipe-section-title"><strong>Instructions</strong><small class="subtle">Description, prep time, ingredients and cooking notes</small></span>
+                <span class="recipe-section-chevron" aria-hidden="true">${this.recipeDetailsOpen ? "⌃" : "⌄"}</span>
+              </button>
+              <div id="recipe-optional-details" class="recipe-section-content" ?hidden=${!this.recipeDetailsOpen}>
+                <div class="detail-grid">
+                  <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+                  <label>Prep time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
+                  <div class="wide ingredient-picker"><strong>Ingredients (optional)</strong>
+                    <label>Search products to add<input type="search" .value=${this.recipeIngredientSearch} placeholder="Type a product name, brand or barcode"
+                      @input=${(event: Event) => { this.recipeIngredientSearch = (event.currentTarget as HTMLInputElement).value; }}></label>
+                    ${this.recipeIngredientSearch.trim() ? this.recipeIngredientMatches.length
+                      ? html`<div class="ingredient-results" aria-label="Ingredient search results">${this.recipeIngredientMatches.map((product) => html`
+                          <div class="ingredient-result"><span><strong>${product.name}</strong><small> · ${product.stock_unit}</small></span>
+                            <button type="button" class="secondary" @click=${() => this.addRecipeIngredient(product)}>Add</button></div>`)}</div>`
+                      : html`<p class="subtle" role="status">No matching products found.</p>`
+                      : html`<small class="subtle">Search your products, then add ingredients to this recipe.</small>`}
                   </div>
-                </div>`;
-              }) : html`<p class="subtle">No ingredients added.</p>`}
+                  <div class="wide"><strong>Added ingredients</strong>
+                    ${draft.ingredients.length ? draft.ingredients.map((ingredient) => {
+                      const product = this.snapshot?.inventory.find((item) => item.id === ingredient.productId);
+                      return html`<div class="recipe-ingredient">
+                        <div class="ingredient-heading"><strong>${product?.name ?? "Unavailable product"}</strong>
+                          <button type="button" class="secondary" @click=${() => this.removeRecipeIngredient(ingredient.productId)}>Remove</button></div>
+                        <div class="ingredient-fields">
+                          <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
+                          <label>Unit (optional)<input type="text" .value=${ingredient.unit || product?.stock_unit || ""}
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
+                          <label>Exact product variant (optional)<select .value=${ingredient.variantId}
+                            @change=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
+                            <option value="">Any variant</option>${(product?.variants ?? []).map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
+                          </select></label>
+                          <label>Notes (optional)<input type="text" .value=${ingredient.notes}
+                            @input=${(event: Event) => this.updateRecipeIngredient(ingredient.productId, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
+                        </div>
+                      </div>`;
+                    }) : html`<p class="subtle">No ingredients added.</p>`}
+                  </div>
+                  <label class="wide">Cooking instructions (optional)<textarea .value=${draft.instructions} @input=${(event: Event) => this.updateRecipeDraft("instructions", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+                </div>
+              </div>
             </div>
           </div>
         </div>

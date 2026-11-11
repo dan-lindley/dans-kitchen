@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Grouped optional recipe details under a collapsible Instructions section while
+  keeping required fields and Save/Cancel controls visible.
+
 ## 0.2.2
 
 - Kept recipe Save and Cancel controls visible while the form content scrolls.
