@@ -93,8 +93,10 @@ and frontend code on clean Linux runners.
 
 ## Scope and limitations
 
-- This is the initial `0.1.0` release. It does not use Grocy, Home Assistant
-  Recorder, a separate server or a remote database.
+- Version `0.2.0` includes complete recipe forms with required effort, cooking
+  time and weekday eligibility, plus backend-mediated barcode lookup feedback.
+  It does not use Grocy, Home Assistant Recorder, a separate server or a
+  remote database.
 - Product and recipe image paths are metadata; image upload and management are
   not part of this release.
 - Companion App native barcode APIs are not assumed. Camera scanning uses

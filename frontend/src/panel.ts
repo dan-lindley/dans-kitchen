@@ -2,6 +2,7 @@ import { BrowserMultiFormatReader } from "@zxing/browser";
 import { html, LitElement, nothing, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { WEEKDAY_NAMES, weekdayMondayZero } from "./date";
+import { createRecipeDraft, recipeDraftPayload, type RecipeDraft } from "./recipe-form";
 import type {
   HomeAssistantLike,
   KitchenSnapshot,
@@ -15,6 +16,20 @@ import type {
 
 type Tab = "kitchen" | "meals" | "shopping" | "settings";
 type ScannerControls = { stop(): void };
+type FormField = {
+  key: string;
+  label: string;
+  type: "text" | "number" | "date" | "select" | "textarea";
+  value?: string;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  step?: number | "any";
+  options?: Array<{ value: string; label: string }>;
+  help?: string;
+};
+type FormValues = Record<string, string>;
+type AppForm = { title: string; description?: string; fields: FormField[]; submitLabel?: string };
 
 declare global {
   interface Window {
@@ -63,11 +78,16 @@ export class DansKitchenPanel extends LitElement {
   @state() private scannerQuantity = "1";
   @state() private backupFiles: string[] = [];
   @state() private databaseInfo?: Record<string, unknown>;
+  @state() private appForm?: AppForm;
+  @state() private appFormError = "";
+  @state() private recipeDraft?: RecipeDraft;
+  @state() private recipeFormError = "";
   private scannerControls?: ScannerControls;
   private scannerStream?: MediaStream;
   private nativeScanFrame = 0;
   private lastBarcode = "";
   private lastBarcodeAt = 0;
+  private appFormResolver?: (values: FormValues | undefined) => void;
 
   static styles = css`
     :host {
@@ -141,6 +161,16 @@ export class DansKitchenPanel extends LitElement {
     dialog { color:var(--primary-text-color); background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:12px; width:min(580px, calc(100vw - 24px)); max-height:90vh; overflow:auto; padding:16px; }
     dialog::backdrop { background:#0008; }
     .dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; margin-top:14px; }
+    dialog[open] { position:fixed; inset:50% auto auto 50%; transform:translate(-50%,-50%); margin:0; box-shadow:0 12px 40px #0004; z-index:10; }
+    .app-form, .recipe-form { display:grid; gap:12px; }
+    .form-fields { display:grid; gap:10px; }
+    .recipe-form { width:min(760px, calc(100vw - 24px)); }
+    .ingredient-option { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:8px; border-bottom:1px solid var(--divider-color); padding:9px 0; }
+    .ingredient-option input[type=checkbox] { margin-top:4px; }
+    .ingredient-fields { grid-column:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .weekday-toggle { display:grid; justify-items:center; gap:4px; color:var(--secondary-text-color); font-size:12px; border:1px solid var(--divider-color); border-radius:7px; padding:6px; }
+    .weekday-toggle input { min-height:20px; }
+    .form-error { color:var(--error-color, #b3261e); }
     video { width:100%; max-height:55vh; background:#000; border-radius:8px; object-fit:cover; }
     .weekdays { display:flex; flex-wrap:wrap; gap:7px; }
     .weekday { display:flex; align-items:center; gap:3px; border:1px solid var(--divider-color); border-radius:6px; padding:4px 6px; }
@@ -150,6 +180,7 @@ export class DansKitchenPanel extends LitElement {
       .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .planner { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .variant { grid-template-columns:1fr auto; } .variant .variant-meta { grid-column:1/-1; }
       .detail-grid { grid-template-columns:1fr; } .detail-grid .wide { grid-column:auto; }
+      .ingredient-fields { grid-template-columns:1fr; }
       table thead { display:none; } table, tbody, tr, td { display:block; width:100%; } tr.product-row { padding:8px 0; border-bottom:1px solid var(--divider-color); }
       tr.product-row td { display:flex; justify-content:space-between; gap:10px; border:0; padding:3px 0; } tr.product-row td::before { content:attr(data-label); color:var(--secondary-text-color); font-size:11px; }
       .setting-row { grid-template-columns:1fr; } .filters { width:100%; } .filters label { flex:1; }
@@ -169,6 +200,89 @@ export class DansKitchenPanel extends LitElement {
   private async request<T>(command: string, data: Record<string, unknown> = {}): Promise<T> {
     if (!this.hass) throw new Error("Home Assistant is not connected.");
     return this.hass.callWS<T>({ type: "dans_kitchen/command", command, data });
+  }
+
+  private requestForm(
+    title: string,
+    fields: FormField[],
+    description?: string,
+    submitLabel = "Save",
+  ): Promise<FormValues | undefined> {
+    if (this.appFormResolver) return Promise.reject(new Error("Another form is already open."));
+    this.appFormError = "";
+    this.appForm = { title, fields, description, submitLabel };
+    return new Promise((resolve) => { this.appFormResolver = resolve; });
+  }
+
+  private closeAppForm(values?: FormValues): void {
+    const resolve = this.appFormResolver;
+    this.appFormResolver = undefined;
+    this.appForm = undefined;
+    this.appFormError = "";
+    resolve?.(values);
+  }
+
+  private submitAppForm(event: Event): void {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    if (!this.appForm) return;
+    const data = new FormData(form);
+    const values: FormValues = {};
+    for (const field of this.appForm.fields) {
+      const value = String(data.get(field.key) ?? "");
+      if (field.required && !value.trim()) {
+        this.appFormError = `${field.label} is required.`;
+        return;
+      }
+      if (field.type === "number" && value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+          this.appFormError = `${field.label} must be a number.`;
+          return;
+        }
+        if (field.min !== undefined && number < field.min) {
+          this.appFormError = `${field.label} must be at least ${field.min}.`;
+          return;
+        }
+        if (field.max !== undefined && number > field.max) {
+          this.appFormError = `${field.label} must be no more than ${field.max}.`;
+          return;
+        }
+        if (typeof field.step === "number") {
+          const base = field.min ?? 0;
+          const stepCount = (number - base) / field.step;
+          if (Math.abs(stepCount - Math.round(stepCount)) > 1e-8) {
+            this.appFormError = `${field.label} must use increments of ${field.step}.`;
+            return;
+          }
+        }
+      }
+      values[field.key] = value;
+    }
+    this.closeAppForm(values);
+  }
+
+  private async requestConfirmation(title: string, description: string, submitLabel: string): Promise<boolean> {
+    return (await this.requestForm(title, [], description, submitLabel)) !== undefined;
+  }
+
+  private renderFormField(field: FormField) {
+    const shared = {
+      name: field.key,
+      required: field.required ?? false,
+    };
+    if (field.type === "select") {
+      return html`<label>${field.label}<select name=${field.key} ?required=${field.required ?? false}>
+        ${field.options?.map((option) => html`<option value=${option.value} ?selected=${option.value === field.value}>${option.label}</option>`)}
+      </select>${field.help ? html`<small>${field.help}</small>` : nothing}</label>`;
+    }
+    if (field.type === "textarea") {
+      return html`<label>${field.label}<textarea name=${field.key} .value=${field.value ?? ""} ?required=${field.required ?? false}></textarea>
+        ${field.help ? html`<small>${field.help}</small>` : nothing}</label>`;
+    }
+    return html`<label>${field.label}<input type=${field.type} name=${shared.name} .value=${field.value ?? ""}
+      ?required=${shared.required} min=${field.min ?? nothing} max=${field.max ?? nothing} step=${field.step ?? nothing}>
+      ${field.help ? html`<small>${field.help}</small>` : nothing}</label>`;
   }
 
   private async reload(): Promise<void> {
@@ -393,18 +507,18 @@ export class DansKitchenPanel extends LitElement {
   private closeProduct(): void { this.selectedProduct = undefined; this.productHistory = []; }
 
   private async openProductForm(): Promise<void> {
-    const name = window.prompt("Generic product name");
-    if (!name?.trim()) return;
-    const stockUnit = window.prompt("Stock unit (for example tin, bottle or kg)", "item");
-    if (!stockUnit?.trim()) return;
-    const reorder = window.prompt(`Reorder threshold in ${stockUnit}; use 0 to disable`, "0");
-    if (reorder === null || !Number.isFinite(Number(reorder)) || Number(reorder) < 0) return;
-    const locationId = this.selectLocation(undefined, "Default storage location");
-    if (locationId === undefined) return;
+    const values = await this.requestForm("Add product", [
+      { key: "name", label: "Generic product name", type: "text", required: true },
+      { key: "stock_unit", label: "Stock unit (for example tin, bottle or kg)", type: "text", value: "item", required: true },
+      { key: "reorder_level", label: "Reorder threshold (0 disables)", type: "number", value: "0", min: 0, step: "any" },
+      this.locationField("default_location_id"),
+    ]);
+    if (!values) return;
     this.working = true;
     try {
       const product = await this.request<Product>("product/create", {
-        name: name.trim(), stock_unit: stockUnit.trim(), reorder_level: Number(reorder), default_location_id: locationId,
+        name: values.name.trim(), stock_unit: values.stock_unit.trim(),
+        reorder_level: Number(values.reorder_level || 0), default_location_id: values.default_location_id || undefined,
       });
       await this.request("variant/create", { product_id: product.id });
       await this.reload();
@@ -414,109 +528,119 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async editProduct(product: Product): Promise<void> {
-    const name = window.prompt("Product name", product.name);
-    if (!name?.trim()) return;
-    const threshold = window.prompt(`Reorder threshold in ${product.stock_unit} (0 disables)`, String(product.reorder_level));
-    if (threshold === null || !Number.isFinite(Number(threshold)) || Number(threshold) < 0) return;
-    const location = this.selectLocation(product.default_location_id ?? undefined, "Default storage location");
-    if (location === undefined) return;
+    const values = await this.requestForm("Edit product", [
+      { key: "name", label: "Product name", type: "text", value: product.name, required: true },
+      { key: "reorder_level", label: `Reorder threshold in ${product.stock_unit} (0 disables)`, type: "number", value: String(product.reorder_level), min: 0, step: "any" },
+      this.locationField("default_location_id", product.default_location_id ?? ""),
+    ]);
+    if (!values) return;
     await this.mutate("product/update", {
-      product_id: product.id, name: name.trim(), reorder_level: Number(threshold), default_location_id: location,
+      product_id: product.id, name: values.name.trim(), reorder_level: Number(values.reorder_level),
+      default_location_id: values.default_location_id || null,
     }, "Product updated.");
     await this.openProduct(product.id);
   }
 
   private async editVariant(product: Product, variant: Variant): Promise<void> {
-    const brand = window.prompt("Brand name", variant.brand_name ?? "");
-    if (brand === null) return;
-    const name = window.prompt("Variant name", variant.variant_name ?? "");
-    if (name === null) return;
-    const barcode = window.prompt("Barcode (leave blank to clear)", variant.barcode ?? "");
-    if (barcode === null) return;
-    const size = window.prompt("Package size (leave blank to clear)", variant.package_size === null ? "" : String(variant.package_size));
-    if (size === null) return;
-    const unit = size ? window.prompt("Package unit", variant.package_unit ?? product.stock_unit) : null;
-    if (size && !unit) return;
+    const values = await this.requestForm("Edit product variant", [
+      { key: "brand_name", label: "Brand name", type: "text", value: variant.brand_name ?? "" },
+      { key: "variant_name", label: "Variant name", type: "text", value: variant.variant_name ?? "" },
+      { key: "barcode", label: "Barcode (leave blank to clear)", type: "text", value: variant.barcode ?? "" },
+      { key: "package_size", label: "Package size (leave blank to clear)", type: "number", value: variant.package_size === null ? "" : String(variant.package_size), min: 0, step: "any" },
+      { key: "package_unit", label: "Package unit", type: "text", value: variant.package_unit ?? product.stock_unit },
+    ]);
+    if (!values) return;
+    const size = values.package_size.trim();
     await this.mutate("variant/update", {
       variant_id: variant.id,
-      brand_name: brand || null,
-      variant_name: name || null,
-      barcode: barcode || null,
+      brand_name: values.brand_name || null,
+      variant_name: values.variant_name || null,
+      barcode: values.barcode || null,
       package_size: size ? Number(size) : null,
-      package_unit: size ? unit : null,
+      package_unit: size ? values.package_unit || product.stock_unit : null,
     }, "Variant updated.");
     await this.openProduct(product.id);
   }
 
-  private selectLocation(defaultId?: string, label = "Storage location"): string | null | undefined {
-    const locations = this.snapshot?.locations ?? [];
-    const currentIndex = defaultId ? locations.findIndex((item) => item.id === defaultId) + 1 : 0;
-    const choices = ["0. None", ...locations.map((item, index) => `${index + 1}. ${item.name}`)].join("\n");
-    const raw = window.prompt(`${label}:\n${choices}`, String(currentIndex));
-    if (raw === null) return undefined;
-    const choice = Number(raw);
-    if (!Number.isInteger(choice) || choice < 0 || choice > locations.length) {
-      this.error = "Select one of the listed storage locations.";
-      return undefined;
-    }
-    return choice === 0 ? null : locations[choice - 1].id;
+  private locationField(key: string, value = "", label = "Default storage location"): FormField {
+    return {
+      key, label, type: "select", value,
+      options: [{ value: "", label: "No default location" }, ...(this.snapshot?.locations ?? []).map((location) => ({ value: location.id, label: location.name }))],
+    };
   }
 
   private async openVariantForm(product: Product): Promise<void> {
-    const brand = window.prompt("Brand name (optional)");
-    if (brand === null) return;
-    const variantName = window.prompt("Variant description (optional)", "");
-    if (variantName === null) return;
-    const barcode = window.prompt("Barcode (optional)", "");
-    if (barcode === null) return;
-    const size = window.prompt("Package size (optional)", "");
-    if (size === null) return;
-    const unit = size ? window.prompt("Package unit", product.stock_unit) : null;
-    if (size && !unit) return;
+    const values = await this.requestForm("Add product variant", [
+      { key: "brand_name", label: "Brand name (optional)", type: "text" },
+      { key: "variant_name", label: "Variant description (optional)", type: "text" },
+      { key: "barcode", label: "Barcode (optional)", type: "text" },
+      { key: "package_size", label: "Package size (optional)", type: "number", min: 0, step: "any" },
+      { key: "package_unit", label: "Package unit", type: "text", value: product.stock_unit },
+    ]);
+    if (!values) return;
+    const size = values.package_size.trim();
     await this.mutate("variant/create", {
       product_id: product.id,
-      brand_name: brand || undefined,
-      variant_name: variantName || undefined,
-      barcode: barcode || undefined,
+      brand_name: values.brand_name || undefined,
+      variant_name: values.variant_name || undefined,
+      barcode: values.barcode || undefined,
       package_size: size ? Number(size) : undefined,
-      package_unit: size ? unit : undefined,
+      package_unit: size ? values.package_unit || product.stock_unit : undefined,
     }, "Variant added.");
     await this.openProduct(product.id);
   }
 
   private async stockAction(product: Product, variant: Variant | undefined, action: "add" | "use"): Promise<void> {
-    const raw = window.prompt(`${action === "add" ? "Add" : "Use"} quantity in ${product.stock_unit}`, "1");
-    if (raw === null || !Number.isFinite(Number(raw)) || Number(raw) <= 0) return;
+    if (action === "add" && !product.variants.length) {
+      this.error = "Add a product variant before adding stock.";
+      return;
+    }
+    const fields: FormField[] = [
+      { key: "quantity", label: `${action === "add" ? "Add" : "Use"} quantity in ${product.stock_unit}`, type: "number", value: "1", required: true, min: 0.001, step: "any" },
+    ];
+    if (action === "add" && !variant && product.variants.length > 1) {
+      fields.push({
+        key: "variant_id", label: "Product variant", type: "select", required: true,
+        options: product.variants.map((item) => ({ value: item.id, label: `${item.brand_name ?? "Unbranded"} ${item.variant_name ?? ""}`.trim() })),
+      });
+    }
+    if (action === "add") {
+      fields.push(this.locationField("location_id", product.default_location_id ?? "", "Storage location for this stock addition"));
+      fields.push(
+        { key: "best_before_date", label: "Best-before date (optional)", type: "date" },
+        { key: "use_by_date", label: "Use-by date (optional)", type: "date" },
+      );
+    }
+    const values = await this.requestForm(`${action === "add" ? "Add" : "Use"} stock · ${product.name}`, fields);
+    if (!values) return;
+    const quantity = Number(values.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      this.error = "Quantity must be greater than zero.";
+      return;
+    }
     try {
       if (action === "add") {
-        let variantId = variant?.id;
-        if (!variantId && product.variants.length === 1) variantId = product.variants[0].id;
-        if (!variantId && product.variants.length > 1) {
-          const index = Number(window.prompt(`Variant number: ${product.variants.map((item, i) => `${i + 1}. ${item.brand_name ?? "Unbranded"} ${item.variant_name ?? ""}`).join("\n")}`, "1"));
-          variantId = product.variants[index - 1]?.id;
-        }
+        const variantId = variant?.id ?? values.variant_id ?? product.variants[0]?.id;
         if (!variantId) throw new Error("Add a product variant before adding stock.");
-        const selectedLocation = this.selectLocation(product.default_location_id ?? undefined, "Storage location for this stock addition");
-        if (selectedLocation === undefined) return;
-        const bestBefore = window.prompt("Best-before date (YYYY-MM-DD, optional)", "") || undefined;
-        const useBy = window.prompt("Use-by date (YYYY-MM-DD, optional)", "") || undefined;
         await this.request("stock/add", {
-          variant_id: variantId, quantity: Number(raw), location_id: selectedLocation ?? undefined,
-          best_before_date: bestBefore, use_by_date: useBy,
+          variant_id: variantId, quantity, location_id: values.location_id || undefined,
+          best_before_date: values.best_before_date || undefined, use_by_date: values.use_by_date || undefined,
         });
       } else {
-        await this.request("stock/use", { product_id: product.id, variant_id: variant?.id, quantity: Number(raw) });
+        await this.request("stock/use", { product_id: product.id, variant_id: variant?.id, quantity });
       }
       await this.reload();
-      this.notice = `${action === "add" ? "Added" : "Used"} ${raw} ${product.stock_unit}.`;
+      this.notice = `${action === "add" ? "Added" : "Used"} ${quantity} ${product.stock_unit}.`;
       if (this.selectedProduct?.id === product.id) await this.openProduct(product.id);
     } catch (error) { this.error = this.message(error); }
   }
 
   private async correctBatch(batchId: string, quantity: number): Promise<void> {
-    const raw = window.prompt("Correct batch quantity", String(quantity));
-    if (raw === null || !Number.isFinite(Number(raw)) || Number(raw) < 0) return;
-    await this.mutate("stock/correct", { batch_id: batchId, quantity: Number(raw), reason: "Manual correction" }, "Stock corrected.");
+    const values = await this.requestForm("Correct batch quantity", [
+      { key: "quantity", label: "Quantity", type: "number", value: String(quantity), required: true, min: 0, step: "any" },
+    ]);
+    if (!values) return;
+    await this.mutate("stock/correct", { batch_id: batchId, quantity: Number(values.quantity), reason: "Manual correction" }, "Stock corrected.");
     if (this.selectedProduct) await this.openProduct(this.selectedProduct.id);
   }
 
@@ -601,87 +725,86 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async createRecipe(): Promise<void> {
-    const name = window.prompt("Recipe name");
-    if (!name?.trim()) return;
-    await this.mutate("recipe/create", { name: name.trim() }, "Recipe created.");
+    this.recipeDraft = createRecipeDraft();
+    this.recipeFormError = "";
   }
 
   private async editRecipe(recipe: Recipe): Promise<void> {
-    const name = window.prompt("Recipe name", recipe.name);
-    if (!name?.trim()) return;
-    const effort = window.prompt("Effort: low, medium, high or leave blank", recipe.effort ?? "");
-    if (effort === null) return;
-    const weekdays = window.prompt("Eligible weekdays as Monday=0 through Sunday=6, comma-separated", recipe.weekdays.join(","));
-    if (weekdays === null) return;
-    const parsedDays = weekdays.split(",").map((value) => Number(value.trim()));
-    if (parsedDays.some((value) => !Number.isInteger(value) || value < 0 || value > 6)) {
-      this.error = "Use weekday numbers from Monday 0 through Sunday 6.";
+    this.recipeDraft = createRecipeDraft(recipe);
+    this.recipeFormError = "";
+  }
+
+  private updateRecipeDraft<K extends keyof RecipeDraft>(key: K, value: RecipeDraft[K]): void {
+    if (!this.recipeDraft) return;
+    this.recipeDraft = { ...this.recipeDraft, [key]: value };
+  }
+
+  private toggleRecipeWeekday(day: number, enabled: boolean): void {
+    const weekdays = new Set(this.recipeDraft?.weekdays ?? []);
+    if (enabled) weekdays.add(day);
+    else weekdays.delete(day);
+    this.updateRecipeDraft("weekdays", [...weekdays].sort((a, b) => a - b));
+  }
+
+  private toggleRecipeIngredient(product: Product, enabled: boolean): void {
+    if (!this.recipeDraft) return;
+    const ingredients = this.recipeDraft.ingredients.filter((item) => item.productId !== product.id);
+    if (enabled) ingredients.push({ productId: product.id, quantity: "", unit: "", variantId: "", notes: "" });
+    this.updateRecipeDraft("ingredients", ingredients);
+  }
+
+  private updateRecipeIngredient(
+    productId: string,
+    key: "quantity" | "unit" | "variantId" | "notes",
+    value: string,
+  ): void {
+    if (!this.recipeDraft) return;
+    this.updateRecipeDraft("ingredients", this.recipeDraft.ingredients.map((item) =>
+      item.productId === productId ? { ...item, [key]: value } : item,
+    ));
+  }
+
+  private async saveRecipe(): Promise<void> {
+    if (!this.recipeDraft) return;
+    const result = recipeDraftPayload(this.recipeDraft, this.snapshot?.inventory ?? []);
+    if (!result.payload) {
+      this.recipeFormError = result.error ?? "Check the recipe details.";
       return;
     }
-    const preparation = window.prompt("Preparation time in minutes (optional)", recipe.preparation_minutes === null ? "" : String(recipe.preparation_minutes));
-    if (preparation === null) return;
-    const cooking = window.prompt("Cooking time in minutes (optional)", recipe.cooking_minutes === null ? "" : String(recipe.cooking_minutes));
-    if (cooking === null) return;
-    const description = window.prompt("Description (optional)", recipe.description ?? "");
-    if (description === null) return;
-    const instructions = window.prompt("Cooking instructions (optional)", recipe.instructions ?? "");
-    if (instructions === null) return;
-    let ingredients = recipe.ingredients.map(({ product_id, required_variant_id, quantity, unit, notes }) => ({ product_id, required_variant_id, quantity, unit, notes }));
-    if (window.confirm("Edit this recipe's ingredient list?")) {
-      const products = this.snapshot!.inventory;
-      const choices = ["0. Clear ingredients", ...products.map((item, index) => `${index + 1}. ${item.name} (${item.stock_unit})`)].join("\n");
-      const selected = window.prompt(`Select a generic product number for each optional ingredient. Enter 0 to clear, or Cancel to keep the current list.\n${choices}`);
-      if (selected !== null) {
-        const productIndex = Number(selected);
-        if (!Number.isInteger(productIndex) || productIndex < 0 || productIndex > products.length) {
-          this.error = "Choose one of the displayed product numbers.";
-          return;
-        }
-        ingredients = [];
-        if (productIndex > 0) {
-          const product = products[productIndex - 1];
-          const quantity = window.prompt(`Required quantity in ${product.stock_unit}; leave blank for unspecified`, "");
-          if (quantity === null) return;
-          const unit = quantity ? window.prompt("Ingredient unit", product.stock_unit) : null;
-          if (quantity && !unit) return;
-          const variants = product.variants;
-          let requiredVariantId: string | null = null;
-          if (variants.length) {
-            const variant = window.prompt(`Require an exact variant? Enter its number or leave blank:\n${variants.map((item, index) => `${index + 1}. ${item.brand_name ?? "Unbranded"} ${item.variant_name ?? ""}`).join("\n")}`);
-            if (variant === null) return;
-            if (variant.trim()) requiredVariantId = variants[Number(variant) - 1]?.id ?? null;
-            if (variant.trim() && !requiredVariantId) { this.error = "Select an existing variant number."; return; }
-          }
-          ingredients = [{
-            product_id: product.id, required_variant_id: requiredVariantId,
-            quantity: quantity ? Number(quantity) : null, unit: quantity ? unit : null, notes: null,
-          }];
-        }
-      }
+    this.working = true;
+    this.recipeFormError = "";
+    try {
+      await this.request(this.recipeDraft.recipeId ? "recipe/update" : "recipe/create", result.payload);
+      await this.reload();
+      this.notice = this.recipeDraft.recipeId ? "Recipe updated." : "Recipe created.";
+      this.recipeDraft = undefined;
+    } catch (error) {
+      this.recipeFormError = this.message(error);
+    } finally {
+      this.working = false;
     }
-    const preparationMinutes = preparation.trim() ? Number(preparation) : null;
-    const cookingMinutes = cooking.trim() ? Number(cooking) : null;
-    if ([preparationMinutes, cookingMinutes].some((value) => value !== null && (!Number.isInteger(value) || value < 0))) {
-      this.error = "Preparation and cooking time must be non-negative whole minutes.";
-      return;
-    }
-    await this.mutate("recipe/update", {
-      recipe_id: recipe.id, name: name.trim(), effort: effort || null, weekdays: parsedDays,
-      description: description || null, preparation_minutes: preparationMinutes,
-      cooking_minutes: cookingMinutes,
-      instructions: instructions || null,
-      ingredients,
-    }, "Recipe updated.");
-    if (window.confirm("Duplicate this recipe?")) {
-      const duplicateName = window.prompt("Name for the duplicate", `${name.trim()} (copy)`);
-      if (duplicateName?.trim()) await this.mutate("recipe/duplicate", { recipe_id: recipe.id, name: duplicateName.trim() }, "Recipe duplicated.");
-    }
-    if (window.confirm(`Archive "${name.trim()}"?`)) await this.archiveRecipe({ ...recipe, name: name.trim() });
+  }
+
+  private async duplicateRecipe(): Promise<void> {
+    const draft = this.recipeDraft;
+    if (!draft?.recipeId) return;
+    const values = await this.requestForm("Duplicate recipe", [
+      { key: "name", label: "Name for the duplicate", type: "text", value: `${draft.name.trim()} (copy)`, required: true },
+    ]);
+    if (!values) return;
+    await this.mutate("recipe/duplicate", { recipe_id: draft.recipeId, name: values.name.trim() }, "Recipe duplicated.");
+    this.recipeDraft = undefined;
   }
 
   private async archiveRecipe(recipe: Recipe): Promise<void> {
-    if (!window.confirm(`Archive "${recipe.name}"? Existing history will remain.`)) return;
+    const confirmed = await this.requestConfirmation(
+      `Archive "${recipe.name}"?`,
+      "The recipe will be removed from the active library. Existing planner history will remain.",
+      "Archive recipe",
+    );
+    if (!confirmed) return;
     await this.mutate("recipe/archive", { recipe_id: recipe.id }, "Recipe archived.");
+    this.recipeDraft = undefined;
   }
 
   private async renderShoppingAction(item: ShoppingItem, status: ShoppingItem["status"]): Promise<void> {
@@ -713,16 +836,22 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async addShoppingItem(): Promise<void> {
-    const name = window.prompt("Product name or custom shopping item");
-    if (!name?.trim()) return;
-    const product = this.snapshot!.inventory.find((item) => item.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase());
-    const quantity = window.prompt("Quantity (leave blank for unspecified)", "");
-    if (quantity === null) return;
-    const amount = quantity ? Number(quantity) : undefined;
-    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) { this.error = "Shopping quantity must be greater than zero."; return; }
-    const unit = amount ? window.prompt("Unit", product?.stock_unit ?? "item") : undefined;
-    if (amount && !unit) return;
-    await this.mutate("shopping/add", product ? { product_id: product.id, quantity: amount, unit } : { custom_name: name.trim(), quantity: amount, unit }, "Shopping item added.");
+    const values = await this.requestForm("Add shopping item", [
+      { key: "name", label: "Product name or custom item", type: "text", required: true },
+      { key: "quantity", label: "Quantity (optional)", type: "number", min: 0.001, step: "any" },
+      { key: "unit", label: "Unit (optional)", type: "text", value: "item" },
+    ]);
+    if (!values) return;
+    const name = values.name.trim();
+    const product = this.snapshot!.inventory.find((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    const amount = values.quantity ? Number(values.quantity) : undefined;
+    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) {
+      this.error = "Shopping quantity must be greater than zero.";
+      return;
+    }
+    await this.mutate("shopping/add", product
+      ? { product_id: product.id, quantity: amount, unit: amount ? values.unit : undefined }
+      : { custom_name: name, quantity: amount, unit: amount ? values.unit : undefined }, "Shopping item added.");
   }
 
   private async completeShoppingItem(item: ShoppingItem): Promise<void> {
@@ -735,26 +864,33 @@ export class DansKitchenPanel extends LitElement {
       this.error = "Add a product variant before adding this purchase to inventory.";
       return;
     }
-    const variantIndex = Number(window.prompt(
-      `Add purchased stock to which variant?\n${product.variants.map((variant, index) => `${index + 1}. ${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}`).join("\n")}`,
-      "1",
-    ));
-    const variant = product.variants[variantIndex - 1];
-    if (!variant) return;
     const suggestedQuantity = item.unit === product.stock_unit ? item.quantity : 1;
-    const quantity = Number(window.prompt(`Quantity in ${product.stock_unit}`, String(suggestedQuantity ?? 1)));
+    const values = await this.requestForm("Add purchase to inventory", [
+      {
+        key: "variant_id", label: "Product variant", type: "select", required: true,
+        options: product.variants.map((variant) => ({ value: variant.id, label: `${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}`.trim() })),
+      },
+      { key: "quantity", label: `Quantity in ${product.stock_unit}`, type: "number", value: String(suggestedQuantity ?? 1), required: true, min: 0.001, step: "any" },
+      this.locationField("location_id", product.default_location_id ?? "", "Storage location"),
+      { key: "best_before_date", label: "Best-before date (optional)", type: "date" },
+    ]);
+    if (!values) return;
+    const quantity = Number(values.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0) return;
-    const location = this.selectLocation(product.default_location_id ?? undefined, "Purchased stock location");
-    if (location === undefined) return;
-    const expiry = window.prompt("Best-before date (YYYY-MM-DD, optional)", "") || undefined;
     await this.mutate("shopping/complete", {
-      item_id: item.id, variant_id: variant.id, quantity, location_id: location ?? undefined,
-      best_before_date: expiry, request_key: `purchase-${item.id}-${Date.now()}`,
+      item_id: item.id, variant_id: values.variant_id, quantity,
+      location_id: values.location_id || undefined,
+      best_before_date: values.best_before_date || undefined,
+      request_key: `purchase-${item.id}-${Date.now()}`,
     }, "Purchase added to inventory and marked complete.");
   }
 
   private async deleteShoppingItem(item: ShoppingItem): Promise<void> {
-    if (!window.confirm(`Delete "${item.product_name ?? item.custom_name}" from the list?`)) return;
+    if (!await this.requestConfirmation(
+      "Delete shopping item?",
+      `Remove "${item.product_name ?? item.custom_name}" from the list?`,
+      "Delete item",
+    )) return;
     await this.mutate("shopping/delete", { item_id: item.id }, "Shopping item deleted.");
   }
 
@@ -777,7 +913,7 @@ export class DansKitchenPanel extends LitElement {
         <p>Database schema v${String(this.snapshot!.database.schema_version ?? "—")} · ${String(this.snapshot!.database.integrity ?? "unknown")} · ${Number(this.snapshot!.database.size_bytes ?? 0).toLocaleString("en-GB")} bytes</p>
         <div class="actions"><button class="secondary" @click=${() => this.exportJson()}>Export JSON</button><button class="secondary" @click=${() => this.exportCsv("products")}>Export products CSV</button><button class="secondary" @click=${() => this.exportCsv("stock_transactions")}>Export history CSV</button><button class="secondary" @click=${() => this.showBackups()}>Restore validated backup</button></div>
       </section>
-      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.1.0 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
+      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.2.0 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
   }
 
   private settingNumber(key: string, label: string, value: number | string, min: number, max: number, optional = false) {
@@ -808,15 +944,19 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async addLocation(): Promise<void> {
-    const name = window.prompt("Location name");
-    if (!name?.trim()) return;
-    await this.mutate("location/create", { name: name.trim() }, "Storage location added.");
+    const values = await this.requestForm("Add storage location", [
+      { key: "name", label: "Location name", type: "text", required: true },
+    ]);
+    if (!values) return;
+    await this.mutate("location/create", { name: values.name.trim() }, "Storage location added.");
   }
 
   private async renameLocation(location: Location): Promise<void> {
-    const name = window.prompt("Location name", location.name);
-    if (!name?.trim()) return;
-    await this.mutate("location/update", { location_id: location.id, name: name.trim() }, "Storage location renamed.");
+    const values = await this.requestForm("Rename storage location", [
+      { key: "name", label: "Location name", type: "text", value: location.name, required: true },
+    ]);
+    if (!values) return;
+    await this.mutate("location/update", { location_id: location.id, name: values.name.trim() }, "Storage location renamed.");
   }
 
   private async reorderLocation(location: Location, offset: number): Promise<void> {
@@ -824,7 +964,11 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async deleteLocation(location: Location): Promise<void> {
-    if (!window.confirm(`Delete location "${location.name}"? It must not be referenced by stock or products.`)) return;
+    if (!await this.requestConfirmation(
+      `Delete location "${location.name}"?`,
+      "Locations referenced by stock or products cannot be deleted.",
+      "Delete location",
+    )) return;
     await this.mutate("location/delete", { location_id: location.id }, "Storage location deleted.");
   }
 
@@ -842,9 +986,71 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private async restoreBackup(filename: string): Promise<void> {
-    if (!window.confirm(`Restore ${filename}? Current data will be replaced after integrity and schema validation.`)) return;
+    if (!await this.requestConfirmation(
+      `Restore ${filename}?`,
+      "Current data will be replaced only after integrity and schema validation.",
+      "Validate and restore",
+    )) return;
     await this.mutate("data/restore", { filename }, "Validated database backup restored.");
     this.backupFiles = [];
+  }
+
+  private renderRecipeEditor() {
+    const draft = this.recipeDraft!;
+    return html`<dialog open aria-modal="true" aria-label=${draft.recipeId ? "Edit recipe" : "Add recipe"}>
+      <form class="recipe-form" novalidate @submit=${(event: Event) => { event.preventDefault(); void this.saveRecipe(); }}>
+        <div class="section-heading"><div><h2>${draft.recipeId ? "Edit recipe" : "Add recipe"}</h2><p class="subtle">Name, effort, cooking time and eligible weekdays are required.</p></div>
+          <button type="button" class="secondary" @click=${() => { this.recipeDraft = undefined; this.recipeFormError = ""; }}>Close</button></div>
+        <div class="detail-grid">
+          <label class="wide">Recipe name<input type="text" required .value=${draft.name} @input=${(event: Event) => this.updateRecipeDraft("name", (event.currentTarget as HTMLInputElement).value)}></label>
+          <label>Effort<select required .value=${draft.effort} @change=${(event: Event) => this.updateRecipeDraft("effort", (event.currentTarget as HTMLSelectElement).value as RecipeDraft["effort"])}>
+            <option value="" disabled>Choose effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+          </select></label>
+          <label>Cooking time (minutes)<input type="number" min="0" max="1440" step="1" required .value=${draft.cookingMinutes} @input=${(event: Event) => this.updateRecipeDraft("cookingMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
+          <label>Preparation time (minutes, optional)<input type="number" min="0" max="1440" step="1" .value=${draft.preparationMinutes} @input=${(event: Event) => this.updateRecipeDraft("preparationMinutes", (event.currentTarget as HTMLInputElement).value)}></label>
+          <label class="wide">Description (optional)<textarea .value=${draft.description} @input=${(event: Event) => this.updateRecipeDraft("description", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+          <label class="wide">Cooking instructions (optional)<textarea .value=${draft.instructions} @input=${(event: Event) => this.updateRecipeDraft("instructions", (event.currentTarget as HTMLTextAreaElement).value)}></textarea></label>
+          <div class="wide"><strong>Eligible weekdays</strong><small class="subtle">On means this recipe may be suggested automatically that day.</small>
+            <div class="weekdays">${WEEKDAY_NAMES.map((name, day) => {
+              const eligible = draft.weekdays.includes(day);
+              return html`<label class="weekday-toggle"><span>${name}</span><input type="checkbox" aria-label=${`${name} eligibility`} .checked=${eligible}
+                @change=${(event: Event) => this.toggleRecipeWeekday(day, (event.currentTarget as HTMLInputElement).checked)}><small>${eligible ? "On" : "Off"}</small></label>`;
+            })}</div></div>
+          <div class="wide"><strong>Ingredients (optional)</strong>
+            ${this.snapshot?.inventory.length ? this.snapshot.inventory.map((product) => {
+              const ingredient = draft.ingredients.find((item) => item.productId === product.id);
+              return html`<div class="ingredient-option">
+                <input type="checkbox" aria-label=${`Include ${product.name}`} .checked=${Boolean(ingredient)}
+                  @change=${(event: Event) => this.toggleRecipeIngredient(product, (event.currentTarget as HTMLInputElement).checked)}>
+                <strong>${product.name}</strong>
+                ${ingredient ? html`<div class="ingredient-fields">
+                  <label>Quantity (optional)<input type="number" min="0.001" step="any" .value=${ingredient.quantity}
+                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "quantity", (event.currentTarget as HTMLInputElement).value)}></label>
+                  <label>Unit (optional)<input type="text" .value=${ingredient.unit || product.stock_unit}
+                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "unit", (event.currentTarget as HTMLInputElement).value)}></label>
+                  <label>Exact product variant (optional)<select .value=${ingredient.variantId}
+                    @change=${(event: Event) => this.updateRecipeIngredient(product.id, "variantId", (event.currentTarget as HTMLSelectElement).value)}>
+                    <option value="">Any variant</option>${product.variants.map((variant) => html`<option value=${variant.id}>${variant.brand_name ?? "Unbranded"} ${variant.variant_name ?? ""}</option>`)}
+                  </select></label>
+                  <label>Notes (optional)<input type="text" .value=${ingredient.notes}
+                    @input=${(event: Event) => this.updateRecipeIngredient(product.id, "notes", (event.currentTarget as HTMLInputElement).value)}></label>
+                </div>` : nothing}
+              </div>`;
+            }) : html`<p class="subtle">Add products in My Kitchen to include optional ingredients.</p>`}
+          </div>
+        </div>
+        ${this.recipeFormError ? html`<p class="form-error" role="alert">${this.recipeFormError}</p>` : nothing}
+        <div class="dialog-actions">
+          ${draft.recipeId ? html`<button type="button" class="secondary" @click=${() => this.duplicateRecipe()}>Duplicate</button>
+            <button type="button" class="secondary danger" @click=${() => {
+              const recipe = this.snapshot?.recipes.find((item) => item.id === draft.recipeId);
+              if (recipe) void this.archiveRecipe(recipe);
+            }}>Archive</button>` : nothing}
+          <button type="button" class="secondary" @click=${() => { this.recipeDraft = undefined; this.recipeFormError = ""; }}>Cancel</button>
+          <button type="submit" ?disabled=${this.working}>${this.working ? "Saving…" : "Save recipe"}</button>
+        </div>
+      </form>
+    </dialog>`;
   }
 
   private async exportJson(): Promise<void> {
@@ -867,6 +1073,16 @@ export class DansKitchenPanel extends LitElement {
 
   private renderDialogs() {
     return html`
+      ${this.recipeDraft ? this.renderRecipeEditor() : nothing}
+      ${this.appForm ? html`<dialog open aria-modal="true" aria-label=${this.appForm.title}>
+        <form class="app-form" novalidate @submit=${(event: Event) => this.submitAppForm(event)}>
+          <div class="section-heading"><div><h2>${this.appForm.title}</h2>${this.appForm.description ? html`<p class="subtle">${this.appForm.description}</p>` : nothing}</div></div>
+          <div class="form-fields">${this.appForm.fields.map((field) => this.renderFormField(field))}</div>
+          ${this.appFormError ? html`<p class="form-error" role="alert">${this.appFormError}</p>` : nothing}
+          <div class="dialog-actions"><button type="button" class="secondary" @click=${() => this.closeAppForm()}>Cancel</button>
+            <button type="submit">${this.appForm.submitLabel ?? "Save"}</button></div>
+        </form>
+      </dialog>` : nothing}
       ${this.plannerDay ? html`<dialog open aria-label="Select a meal for ${this.plannerDay.date}">
         <div class="section-heading"><div><h2>${this.formatDate(this.plannerDay.date)}</h2><p class="subtle">${this.plannerDay.assignment_type} · ${this.plannerDay.recipe_name ?? "Unplanned"}</p></div>
           <button class="secondary" @click=${() => { this.plannerDay = undefined; }}>Close</button></div>
@@ -886,8 +1102,9 @@ export class DansKitchenPanel extends LitElement {
           <button class="secondary" @click=${() => this.setRecurrence()}>Set recurrence</button></div>
       </dialog>` : nothing}
       ${this.unknownBarcode ? html`<dialog open aria-label="Register scanned product">
-        <div class="section-heading"><h2>Unknown barcode</h2><button class="secondary" @click=${() => { this.unknownBarcode = undefined; }}>Close</button></div>
-        <p>Barcode <strong>${String(this.unknownBarcode.barcode)}</strong> was not found locally. Review the lookup and choose a generic product; similar names are suggestions only.</p>
+        <div class="section-heading"><h2>${this.barcodeLookupTitle()}</h2><button class="secondary" @click=${() => { this.unknownBarcode = undefined; }}>Close</button></div>
+        <p role="status">${String(this.unknownBarcode.lookup_message ?? "No product details were returned. Enter the product manually.")}</p>
+        <p>Barcode <strong>${String(this.unknownBarcode.barcode)}</strong>. Review the details and choose a generic product; similar names are suggestions only.</p>
         <label>Product name<input id="scan-name" .value=${String(this.unknownBarcode.name ?? "")}></label>
         <label>Brand<input id="scan-brand" .value=${String(this.unknownBarcode.brand_name ?? "")}></label>
         <label>Assign to generic product<select id="scan-product"><option value="">Create new generic product</option>${this.snapshot?.inventory.map((product) => html`<option value=${product.id}>${product.name}</option>`)}</select></label>
@@ -943,12 +1160,20 @@ export class DansKitchenPanel extends LitElement {
   private async setRecurrence(): Promise<void> {
     const day = this.plannerDay;
     if (!day) return;
-    const recipeId = day.recipe_id || window.prompt("Recipe ID to repeat");
-    if (!recipeId) return;
-    const interval = Number(window.prompt("Repeat every 1, 2 or 4 weeks", "1"));
-    if (![1, 2, 4].includes(interval)) return;
+    const values = await this.requestForm("Set recurring meal", [
+      {
+        key: "recipe_id", label: "Recipe", type: "select", required: true, value: day.recipe_id ?? "",
+        options: (this.snapshot?.recipes ?? []).map((recipe) => ({ value: recipe.id, label: recipe.name })),
+      },
+      {
+        key: "interval_weeks", label: "Repeat every", type: "select", value: "1",
+        options: [{ value: "1", label: "Every week" }, { value: "2", label: "Every 2 weeks" }, { value: "4", label: "Every 4 weeks" }],
+      },
+    ], `This creates an explicit recurrence for ${WEEKDAY_NAMES[day.weekday]}.`);
+    if (!values) return;
     await this.mutate("recurrence/set", {
-      recipe_id: recipeId, weekday: day.weekday, anchor_date: day.date, interval_weeks: interval,
+      recipe_id: values.recipe_id, weekday: day.weekday, anchor_date: day.date,
+      interval_weeks: Number(values.interval_weeks),
     }, "Recurring meal saved.");
     this.plannerDay = undefined;
   }
@@ -960,7 +1185,14 @@ export class DansKitchenPanel extends LitElement {
     this.lastBarcodeAt = now;
     this.barcode = code;
     try {
-      const result = await this.request<{ matched: boolean; variant?: Variant; product?: Record<string, unknown>; source: string }>("barcode/lookup", { barcode: code });
+      const result = await this.request<{
+        matched: boolean;
+        variant?: Variant;
+        product?: Record<string, unknown> | null;
+        source: string;
+        lookup_status?: string;
+        lookup_message?: string;
+      }>("barcode/lookup", { barcode: code });
       if (result.matched && result.variant) {
         await this.request("stock/add", {
           variant_id: result.variant.id,
@@ -974,7 +1206,12 @@ export class DansKitchenPanel extends LitElement {
         this.barcode = "";
         return;
       }
-      this.unknownBarcode = { barcode: code, ...(result.product ?? {}) };
+      this.unknownBarcode = {
+        barcode: code,
+        ...(result.product ?? {}),
+        lookup_status: result.lookup_status ?? result.source,
+        lookup_message: result.lookup_message ?? "No product details were returned. Enter the product manually.",
+      };
     } catch (error) { this.error = this.message(error); }
   }
 
@@ -1008,6 +1245,17 @@ export class DansKitchenPanel extends LitElement {
       await this.reload();
       this.notice = "Product variant and initial stock saved.";
     } catch (error) { this.error = this.message(error); }
+  }
+
+  private barcodeLookupTitle(): string {
+    switch (this.unknownBarcode?.lookup_status) {
+      case "found": return "Product details found";
+      case "incomplete": return "Product details incomplete";
+      case "unavailable": return "External lookup unavailable";
+      case "disabled": return "External lookup disabled";
+      case "not_found": return "Barcode not found";
+      default: return "Barcode lookup result";
+    }
   }
 
   private openScanner(): void {

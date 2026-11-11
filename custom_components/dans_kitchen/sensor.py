@@ -16,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import KitchenConfigEntry, RuntimeData
-from .const import DOMAIN, NAME
+from .const import DOMAIN, NAME, VERSION
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -117,7 +117,7 @@ class KitchenSummarySensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
             name=NAME,
             manufacturer="Dan's Kitchen",
             model="Household food manager",
-            sw_version="0.1.0",
+            sw_version=VERSION,
         )
 
     @property

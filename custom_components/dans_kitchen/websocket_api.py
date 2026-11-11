@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-import re
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -18,10 +14,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .barcode_lookup import lookup_barcode, normalize_barcode
 from .const import DOMAIN
 from .services import DomainError
-
-_BARCODE = re.compile(r"^[0-9]{8,14}$")
 
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
@@ -260,69 +255,15 @@ async def _dispatch(hass: HomeAssistant, runtime: Any, command: str, data: dict[
 
 
 async def _lookup_barcode(hass: HomeAssistant, service: Any, barcode: str) -> dict[str, Any]:
-    code = str(barcode).strip()
-    if not _BARCODE.fullmatch(code):
-        raise DomainError("Enter a valid EAN/UPC barcode of 8 to 14 digits.")
-    local = await service.async_find_barcode(code)
-    if local:
-        return {"matched": True, "source": "local", "variant": local}
-    settings = await service.async_get_settings()
-    if not settings["external_lookup_enabled"]:
-        return {"matched": False, "source": "disabled", "product": None}
-    cached = await service.async_barcode_cache_get(code)
-    if cached:
-        return {"matched": False, "source": "cache", "product": cached}
-    session = async_get_clientsession(hass)
-    url = f"https://world.openfoodfacts.org/api/v2/product/{quote(code)}.json?fields=product_name,brands,quantity,image_url"
-    try:
-        async with asyncio.timeout(10):
-            async with session.get(
-                url,
-                headers={"User-Agent": "DansKitchen/0.1.0 (Home Assistant custom integration)"},
-            ) as response:
-                if response.status != 200:
-                    raise DomainError("Open Food Facts is temporarily unavailable.")
-                payload = await response.json(content_type=None)
-    except (TimeoutError, OSError, json.JSONDecodeError) as err:
-        raise DomainError(
-            "Open Food Facts could not be reached. You can still add the product manually."
-        ) from err
-    if not isinstance(payload, dict) or payload.get("status") != 1:
-        return {"matched": False, "source": "open_food_facts", "product": None}
-    source = payload.get("product") or {}
-    product_name = source.get("product_name")
-    if not isinstance(product_name, str) or not product_name.strip():
-        return {"matched": False, "source": "open_food_facts", "product": None}
-    brand = source.get("brands")
-    image_url = source.get("image_url")
-    product = {
-        "name": product_name.strip()[:200],
-        "brand_name": (
-            brand.split(",")[0].strip()[:100] if isinstance(brand, str) and brand.strip() else None
-        ),
-        "barcode": code,
-        "package_description": source.get("quantity"),
-        "image_url": image_url
-        if isinstance(image_url, str) and image_url.startswith("https://")
-        else None,
-        "external_source": "open_food_facts",
-        "external_source_id": code,
-    }
-    package_description = product["package_description"]
-    if isinstance(package_description, str):
-        size_match = re.fullmatch(
-            r"\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l|cl)\s*",
-            package_description,
-            flags=re.IGNORECASE,
-        )
-        if size_match:
-            product["package_size"] = float(size_match.group(1).replace(",", "."))
-            product["package_unit"] = size_match.group(2).lower()
-    await service.async_barcode_cache_set(code, product)
-    return {"matched": False, "source": "open_food_facts", "product": product}
+    return await lookup_barcode(
+        barcode,
+        service,
+        async_get_clientsession(hass),
+    )
 
 
 async def _register_barcode(service: Any, data: dict[str, Any]) -> dict[str, Any]:
+    data["barcode"] = normalize_barcode(data["barcode"])
     existing = await service.async_find_barcode(data["barcode"])
     if existing:
         stock = await service.async_add_stock(

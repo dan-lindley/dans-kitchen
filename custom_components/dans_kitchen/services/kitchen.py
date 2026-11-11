@@ -991,8 +991,10 @@ class KitchenService:
         preparation_minutes: Any,
         cooking_minutes: Any,
     ) -> None:
-        if effort is not None and effort not in ("low", "medium", "high"):
+        if effort not in ("low", "medium", "high"):
             raise DomainError("Effort must be low, medium, or high.")
+        if cooking_minutes is None:
+            raise DomainError("Cooking time is required.")
         for label, amount in (
             ("Preparation time", preparation_minutes),
             ("Cooking time", cooking_minutes),
@@ -1335,6 +1337,11 @@ class KitchenService:
             raise DomainError("The recurrence anchor must be on its selected weekday.")
         if weekday not in recipe["weekdays"]:
             raise DomainError("The recurrence weekday must be enabled for this recipe.")
+        self._validate_recipe_fields(
+            recipe["effort"],
+            recipe["preparation_minutes"],
+            recipe["cooking_minutes"],
+        )
         if isinstance(interval_weeks, bool) or interval_weeks not in (1, 2, 4):
             raise DomainError("Recurrence interval must be 1, 2, or 4 weeks.")
         existing = await self.db.async_fetch_one(
@@ -1387,6 +1394,11 @@ class KitchenService:
         day = date.fromisoformat(_date(day_value, "Planner date"))
         if recipe_id:
             recipe = await self.async_recipe(recipe_id)
+            self._validate_recipe_fields(
+                recipe["effort"],
+                recipe["preparation_minutes"],
+                recipe["cooking_minutes"],
+            )
             if not allow_ineligible and day.weekday() not in recipe["weekdays"]:
                 raise DomainError("This recipe is not eligible on the selected weekday.")
         rules = await self.async_list_recurrences()
@@ -1514,10 +1526,11 @@ class KitchenService:
         result = []
         effort_order = {"low": 0, "medium": 1, "high": 2}
         for recipe in rows:
+            if recipe["effort"] not in effort_order or recipe["cooking_minutes"] is None:
+                continue
             max_effort = settings.get("planner_max_effort")
             if max_effort and (
-                recipe["effort"] is None
-                or effort_order[recipe["effort"]] > effort_order[max_effort]
+                effort_order[recipe["effort"]] > effort_order[max_effort]
             ):
                 continue
             max_minutes = settings.get("planner_max_cooking_minutes")

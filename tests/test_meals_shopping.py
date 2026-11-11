@@ -17,19 +17,57 @@ async def kitchen(tmp_path):
     return KitchenService(database)
 
 
-async def test_name_only_recipe_defaults_to_all_monday_zero_weekdays(kitchen):
-    recipe = await kitchen.async_create_recipe(name="Tea")
+async def create_recipe(kitchen, **kwargs):
+    kwargs.setdefault("effort", "medium")
+    kwargs.setdefault("cooking_minutes", 30)
+    return await kitchen.async_create_recipe(**kwargs)
 
+
+async def test_recipe_defaults_to_all_monday_zero_weekdays(kitchen):
+    recipe = await create_recipe(kitchen, name="Tea")
     assert recipe["weekdays"] == list(range(7))
     assert recipe["ingredients"] == []
     assert (await kitchen.async_recipe_availability(recipe["id"]))["status"] == "no_ingredients"
 
 
-async def test_recipe_eligibility_and_effort_time_settings_apply_to_suggestions(kitchen):
-    monday = await kitchen.async_create_recipe(
-        name="Monday pasta", weekdays=[0], effort="low", preparation_minutes=10
+async def test_recipe_requires_effort_cooking_time_and_at_least_one_weekday(kitchen):
+    with pytest.raises(DomainError, match="Effort"):
+        await kitchen.async_create_recipe(name="No effort", cooking_minutes=20)
+    with pytest.raises(DomainError, match="Cooking time is required"):
+        await kitchen.async_create_recipe(name="No cooking time", effort="low")
+    with pytest.raises(DomainError, match="one or more unique weekdays"):
+        await kitchen.async_create_recipe(
+            name="No weekdays", effort="high", cooking_minutes=20, weekdays=[]
+        )
+
+
+async def test_recipe_updates_cannot_clear_required_fields(kitchen):
+    recipe = await create_recipe(kitchen, name="Required fields")
+
+    with pytest.raises(DomainError, match="Effort"):
+        await kitchen.async_update_recipe(recipe["id"], effort=None)
+    with pytest.raises(DomainError, match="Cooking time is required"):
+        await kitchen.async_update_recipe(recipe["id"], cooking_minutes=None)
+
+
+async def test_incomplete_legacy_recipes_are_not_automatically_eligible(kitchen):
+    recipe = await create_recipe(kitchen, name="Legacy recipe")
+    await kitchen.db.async_execute(
+        "UPDATE recipes SET effort=NULL,cooking_minutes=NULL WHERE id=?",
+        (recipe["id"],),
     )
-    await kitchen.async_create_recipe(
+
+    assert await kitchen.async_eligible_recipes(MONDAY) == []
+
+
+async def test_recipe_eligibility_and_effort_time_settings_apply_to_suggestions(kitchen):
+    monday = await create_recipe(
+        kitchen,
+        name="Monday pasta", weekdays=[0], effort="low", preparation_minutes=10,
+        cooking_minutes=20,
+    )
+    await create_recipe(
+        kitchen,
         name="Slow roast", weekdays=list(range(7)), effort="high", cooking_minutes=90
     )
     await kitchen.async_set_setting("planner_max_effort", "low")
@@ -44,7 +82,8 @@ async def test_recipe_exact_variant_must_belong_to_generic_product(kitchen):
     other = await kitchen.async_create_product(name="Tomatoes", stock_unit="tin")
     variant = await kitchen.async_create_variant(product["id"])
     with pytest.raises(DomainError, match="belong to"):
-        await kitchen.async_create_recipe(
+        await create_recipe(
+            kitchen,
             name="Bad recipe",
             ingredients=[
                 {
@@ -59,7 +98,8 @@ async def test_recipe_availability_requires_stock_and_explicit_unit_conversion(k
     product = await kitchen.async_create_product(name="Milk", stock_unit="ml")
     variant = await kitchen.async_create_variant(product["id"])
     await kitchen.async_add_stock(variant["id"], 500)
-    recipe = await kitchen.async_create_recipe(
+    recipe = await create_recipe(
+        kitchen,
         name="Pancakes",
         ingredients=[{"product_id": product["id"], "quantity": 0.5, "unit": "l"}],
     )
@@ -70,7 +110,7 @@ async def test_recipe_availability_requires_stock_and_explicit_unit_conversion(k
 
 
 async def test_suggest_meals_fills_four_real_weeks_and_persists_random_entries(kitchen):
-    await kitchen.async_create_recipe(name="Any day")
+    await create_recipe(kitchen, name="Any day")
     generated = await kitchen.async_suggest_meals(today=MONDAY, seed=3)
     after_reload = await kitchen.async_get_planner(today=MONDAY)
 
@@ -83,8 +123,8 @@ async def test_suggest_meals_fills_four_real_weeks_and_persists_random_entries(k
 
 
 async def test_random_meals_never_appear_outside_their_eligible_weekday(kitchen):
-    sunday_recipe = await kitchen.async_create_recipe(name="Sunday only", weekdays=[6])
-    await kitchen.async_create_recipe(name="Tuesday only", weekdays=[1])
+    sunday_recipe = await create_recipe(kitchen, name="Sunday only", weekdays=[6])
+    await create_recipe(kitchen, name="Tuesday only", weekdays=[1])
 
     plan = await kitchen.async_suggest_meals(today=MONDAY, seed=10)
 
@@ -95,7 +135,7 @@ async def test_random_meals_never_appear_outside_their_eligible_weekday(kitchen)
 
 
 async def test_fixed_assignments_and_explicit_unplanned_days_survive_suggestions(kitchen):
-    recipe = await kitchen.async_create_recipe(name="Fixed meal")
+    recipe = await create_recipe(kitchen, name="Fixed meal")
     fixed_day = "2026-11-10"
     clear_day = "2026-11-11"
     await kitchen.async_plan_meal(fixed_day, recipe["id"])
@@ -116,7 +156,7 @@ async def test_fixed_assignments_and_explicit_unplanned_days_survive_suggestions
 
 async def test_weekly_fortnightly_and_four_week_recurrences_resolve_by_anchor(kitchen):
     for weekday, interval in ((0, 1), (1, 2), (2, 4)):
-        recipe = await kitchen.async_create_recipe(name=f"Recurring {interval}", weekdays=[weekday])
+        recipe = await create_recipe(kitchen, name=f"Recurring {interval}", weekdays=[weekday])
         anchor = date(2026, 11, 9) + __import__("datetime").timedelta(days=weekday)
         await kitchen.async_set_recurrence(
             recipe["id"],
@@ -130,8 +170,8 @@ async def test_weekly_fortnightly_and_four_week_recurrences_resolve_by_anchor(ki
 
 
 async def test_one_date_override_can_be_restored_without_changing_rule(kitchen):
-    recipe = await kitchen.async_create_recipe(name="Soup", weekdays=[1])
-    replacement = await kitchen.async_create_recipe(name="Curry", weekdays=[1])
+    recipe = await create_recipe(kitchen, name="Soup", weekdays=[1])
+    replacement = await create_recipe(kitchen, name="Curry", weekdays=[1])
     day = date(2026, 11, 10)
     rule = await kitchen.async_set_recurrence(
         recipe["id"], weekday=1, anchor_date=day.isoformat(), interval_weeks=1
@@ -146,8 +186,8 @@ async def test_one_date_override_can_be_restored_without_changing_rule(kitchen):
 
 
 async def test_suggestion_variety_and_small_catalogue_are_graceful(kitchen):
-    first = await kitchen.async_create_recipe(name="Pasta", weekdays=[0, 1, 2, 3, 4, 5])
-    second = await kitchen.async_create_recipe(name="Tacos", weekdays=[0, 1, 2, 3, 4, 5])
+    first = await create_recipe(kitchen, name="Pasta", weekdays=[0, 1, 2, 3, 4, 5])
+    second = await create_recipe(kitchen, name="Tacos", weekdays=[0, 1, 2, 3, 4, 5])
     plan = await kitchen.async_suggest_meals(today=MONDAY, seed=12)
     planned_days = {
         day["date"]: day["recipe_id"]
@@ -162,7 +202,7 @@ async def test_suggestion_variety_and_small_catalogue_are_graceful(kitchen):
         if following_day in planned_days:
             assert planned_days[following_day] != recipe_id
 
-    only = await kitchen.async_create_recipe(name="Only Sunday", weekdays=[6])
+    only = await create_recipe(kitchen, name="Only Sunday", weekdays=[6])
     sunday_only = await kitchen.async_eligible_recipes(date(2026, 11, 15))
     assert [item["id"] for item in sunday_only] == [only["id"]]
 
