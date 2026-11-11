@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .const import DOMAIN
+from .const import DOMAIN, VERSION
 
-PANEL_ASSET_URL = f"/{DOMAIN}/panel.js"
+PANEL_ASSET_URL = f"/{DOMAIN}/panel.js?v={VERSION}"
 CARD_ASSET_URL = f"/{DOMAIN}/cards.js"
 
 

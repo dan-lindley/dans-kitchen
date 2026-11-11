@@ -2,7 +2,12 @@
 
 import pytest
 
-from custom_components.dans_kitchen.static_assets import static_asset_paths
+from custom_components.dans_kitchen.const import VERSION
+from custom_components.dans_kitchen.static_assets import PANEL_ASSET_URL, static_asset_paths
+
+
+def test_panel_module_url_is_versioned_to_bypass_stale_browser_cache():
+    assert f"/dans_kitchen/panel.js?v={VERSION}" == PANEL_ASSET_URL
 
 
 def test_static_paths_include_nested_vite_chunks(tmp_path):

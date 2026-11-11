@@ -529,13 +529,15 @@ export class DansKitchenPanel extends LitElement {
 
   private async editProduct(product: Product): Promise<void> {
     const values = await this.requestForm("Edit product", [
-      { key: "name", label: "Product name", type: "text", value: product.name, required: true },
-      { key: "reorder_level", label: `Reorder threshold in ${product.stock_unit} (0 disables)`, type: "number", value: String(product.reorder_level), min: 0, step: "any" },
+      { key: "name", label: "Generic product name", type: "text", value: product.name, required: true },
+      { key: "stock_unit", label: "Stock unit", type: "text", value: product.stock_unit, required: true },
+      { key: "reorder_level", label: `Reorder level in ${product.stock_unit} (0 disables)`, type: "number", value: String(product.reorder_level), min: 0, step: "any" },
       this.locationField("default_location_id", product.default_location_id ?? ""),
     ]);
     if (!values) return;
     await this.mutate("product/update", {
-      product_id: product.id, name: values.name.trim(), reorder_level: Number(values.reorder_level),
+      product_id: product.id, name: values.name.trim(), stock_unit: values.stock_unit.trim(),
+      reorder_level: Number(values.reorder_level),
       default_location_id: values.default_location_id || null,
     }, "Product updated.");
     await this.openProduct(product.id);
@@ -913,7 +915,7 @@ export class DansKitchenPanel extends LitElement {
         <p>Database schema v${String(this.snapshot!.database.schema_version ?? "—")} · ${String(this.snapshot!.database.integrity ?? "unknown")} · ${Number(this.snapshot!.database.size_bytes ?? 0).toLocaleString("en-GB")} bytes</p>
         <div class="actions"><button class="secondary" @click=${() => this.exportJson()}>Export JSON</button><button class="secondary" @click=${() => this.exportCsv("products")}>Export products CSV</button><button class="secondary" @click=${() => this.exportCsv("stock_transactions")}>Export history CSV</button><button class="secondary" @click=${() => this.showBackups()}>Restore validated backup</button></div>
       </section>
-      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.2.0 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
+      <section class="section"><h2>About</h2><p>Dan's Kitchen v0.2.1 · Local SQLite database · <a href="https://github.com/dan-lindley/dans-kitchen" target="_blank" rel="noreferrer">GitHub repository</a></p></section>`;
   }
 
   private settingNumber(key: string, label: string, value: number | string, min: number, max: number, optional = false) {

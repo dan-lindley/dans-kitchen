@@ -93,8 +93,8 @@ and frontend code on clean Linux runners.
 
 ## Scope and limitations
 
-- Version `0.2.0` includes complete recipe forms with required effort, cooking
-  time and weekday eligibility, plus backend-mediated barcode lookup feedback.
+- Version `0.2.1` includes complete recipe forms with required effort, cooking
+  time and weekday eligibility, plus cache-versioned Home Assistant panel assets.
   It does not use Grocy, Home Assistant Recorder, a separate server or a
   remote database.
 - Product and recipe image paths are metadata; image upload and management are

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Versioned the Home Assistant panel asset URL so browsers reload the updated
+  form-based UI instead of reusing a cached panel bundle.
+- Added component-level regression coverage for opening the Add Product and
+  Add Recipe forms without native browser dialogues.
+
 ## 0.2.0
 
 - Replaced browser-native prompts and confirmations with styled, complete
