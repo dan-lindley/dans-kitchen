@@ -81,6 +81,7 @@ describe("application forms", () => {
     expect(form!.querySelector('[name="stock_unit"]')).toHaveProperty("required", true);
     expect(form!.textContent).toContain("Add to products");
     expect(form!.textContent).toContain("Add to stock");
+    expect([...form!.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Scan")).toBe(true);
     const addToProducts = [...form!.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Add to products");
     addToProducts!.click();

@@ -79,6 +79,7 @@ export class DansKitchenPanel extends LitElement {
   @state() private shoppingSearch = "";
   @state() private shoppingStatus = "needed";
   @state() private scannerOpen = false;
+  @state() private scannerForAddProduct = false;
   @state() private unknownBarcode?: Record<string, unknown>;
   @state() private barcode = "";
   @state() private scannerQuantity = "1";
@@ -177,7 +178,7 @@ export class DansKitchenPanel extends LitElement {
     .app-form, .recipe-form { display:grid; gap:12px; }
     .form-fields { display:grid; gap:10px; }
     .add-product-form { display:grid; gap:12px; }
-    .barcode-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:end; }
+    .barcode-field { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:end; }
     .barcode-field label { min-width:0; }
     .lookup-result { padding:11px 0; border-block:1px solid var(--divider-color); }
     .lookup-result strong, .lookup-result small { display:block; }
@@ -1202,10 +1203,10 @@ export class DansKitchenPanel extends LitElement {
     return html`
       ${this.recipeDraft ? this.renderRecipeEditor() : nothing}
       ${this.addProductDraft ? html`<dialog class="add-product-dialog" open aria-modal="true" aria-label="Add product">
-        <form class="add-product-form" @submit=${(event: Event) => event.preventDefault()}>
+        <form class="add-product-form" @submit=${(event: Event) => { event.preventDefault(); void this.lookupAddProduct(); }}>
           <div class="section-heading"><h2>Add product</h2><button type="button" class="secondary" @click=${() => { this.addProductDraft = undefined; }}>Close</button></div>
-          <div class="barcode-field"><label>Barcode<input name="barcode" inputmode="numeric" .value=${this.addProductDraft.barcode} @input=${(event: Event) => this.updateAddProduct({ barcode: (event.currentTarget as HTMLInputElement).value })}></label><button type="button" class="secondary" ?disabled=${this.working} @click=${() => this.lookupAddProduct()}>Look up</button></div>
-          ${this.addProductDraft.lookupStatus ? html`<div class="lookup-result" role="status"><small>${this.addProductDraft.lookupStatus === "existing" ? "PRODUCT ALREADY IN YOUR CATALOGUE" : this.barcodeLookupTitleFor(this.addProductDraft.lookupStatus)}</small><strong>${this.addProductDraft.name || "No product details found"}</strong><span>${this.addProductDraft.lookupMessage}</span></div>` : html`<p class="subtle">Scan or enter a barcode to find product details, or complete the fields manually.</p>`}
+          <div class="barcode-field"><label>Barcode<input name="barcode" inputmode="numeric" autocomplete="off" .value=${this.addProductDraft.barcode} @input=${(event: Event) => this.updateAddProduct({ barcode: (event.currentTarget as HTMLInputElement).value })}></label><button type="submit" class="secondary" ?disabled=${this.working}>Look up</button><button type="button" class="secondary" @click=${() => this.openScanner(true)}>Scan</button></div>
+          ${this.addProductDraft.lookupStatus ? html`<div class="lookup-result" role="status"><small>${this.addProductDraft.lookupStatus === "existing" ? "PRODUCT ALREADY IN YOUR CATALOGUE" : this.barcodeLookupTitleFor(this.addProductDraft.lookupStatus)}</small><strong>${this.addProductDraft.name || "No product details found"}</strong><span>${this.addProductDraft.lookupMessage}</span></div>` : html`<p class="subtle">Scan with the camera, or focus the barcode field and use a USB/Bluetooth scanner. Pressing Enter looks the code up.</p>`}
           <div class="add-product-grid">
             <label class="wide">Product name<input name="name" required ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.name} @input=${(event: Event) => this.updateAddProduct({ name: (event.currentTarget as HTMLInputElement).value })}></label>
             <label>Brand<input name="brand_name" ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.brandName} @input=${(event: Event) => this.updateAddProduct({ brandName: (event.currentTarget as HTMLInputElement).value })}></label>
@@ -1265,7 +1266,7 @@ export class DansKitchenPanel extends LitElement {
       ${this.scannerOpen ? html`<dialog open aria-label="Barcode scanner">
         <div class="section-heading"><div><h2>Scan a barcode</h2><p class="subtle">Camera access requires HTTPS or localhost. The rear camera is preferred.</p></div>
           <button class="secondary" @click=${() => this.closeScanner()}>Close scanner</button></div>
-        ${globalThis.isSecureContext ? html`<video id="scanner-video" playsinline muted></video><div class="actions"><button class="secondary" @click=${() => this.toggleTorch()}>Toggle torch</button><label>Quantity<input type="number" min="0.001" step="any" .value=${this.scannerQuantity} @input=${(e: Event) => { this.scannerQuantity = (e.currentTarget as HTMLInputElement).value; }}></label></div>` : html`<p class="error">Camera scanning is unavailable on an insecure origin. Use Home Assistant over HTTPS, or enter the barcode manually below.</p>`}
+        ${globalThis.isSecureContext ? html`<video id="scanner-video" playsinline muted></video><div class="actions"><button class="secondary" @click=${() => this.toggleTorch()}>Toggle torch</button>${this.scannerForAddProduct ? nothing : html`<label>Quantity<input type="number" min="0.001" step="any" .value=${this.scannerQuantity} @input=${(e: Event) => { this.scannerQuantity = (e.currentTarget as HTMLInputElement).value; }}></label>`}</div>` : html`<p class="error">Camera scanning is unavailable on this HTTP address. Use Home Assistant over HTTPS, or focus the manual field and use a USB/Bluetooth scanner.</p>`}
         <label>Manual barcode entry<input id="manual-barcode" inputmode="numeric" .value=${this.barcode} @input=${(e: Event) => { this.barcode = (e.currentTarget as HTMLInputElement).value; }}></label>
         <div class="dialog-actions"><button @click=${() => this.submitManualBarcode()}>Look up barcode</button></div>
       </dialog>` : nothing}
@@ -1436,6 +1437,12 @@ export class DansKitchenPanel extends LitElement {
     this.lastBarcode = code;
     this.lastBarcodeAt = now;
     this.barcode = code;
+    if (this.scannerForAddProduct && this.addProductDraft) {
+      this.updateAddProduct({ barcode: code });
+      this.closeScanner();
+      await this.lookupAddProduct();
+      return;
+    }
     try {
       const result = await this.request<{
         matched: boolean;
@@ -1514,7 +1521,8 @@ export class DansKitchenPanel extends LitElement {
     }
   }
 
-  private openScanner(): void {
+  private openScanner(forAddProduct = false): void {
+    this.scannerForAddProduct = forAddProduct;
     this.scannerOpen = true;
     this.error = "";
     this.updateComplete.then(() => this.startScannerIfNeeded());
@@ -1569,6 +1577,7 @@ export class DansKitchenPanel extends LitElement {
 
   private closeScanner(): void {
     this.scannerOpen = false;
+    this.scannerForAddProduct = false;
     this.unknownBarcode = undefined;
     this.stopScanner();
   }

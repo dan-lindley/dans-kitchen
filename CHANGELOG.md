@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- Added camera scanning directly to the unified Add product card and routed
+  scanned results back into that form.
+- Made USB/Bluetooth barcode scanners trigger lookup when they send Enter, and
+  clarified that browser camera access requires HTTPS or localhost.
+
 ## 0.2.5
 
 - Replaced the separate add-product and barcode-registration prompts with one
