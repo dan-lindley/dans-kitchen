@@ -4,7 +4,7 @@ from pathlib import Path
 
 DOMAIN = "dans_kitchen"
 NAME = "Dan's Kitchen"
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 DATABASE_FILENAME = "dans_kitchen.sqlite3"
 DATABASE_SCHEMA_VERSION = 2
 FRONTEND_DIR = Path(__file__).parent / "frontend" / "dist"

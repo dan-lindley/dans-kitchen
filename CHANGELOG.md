@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7
+
+- Embedded camera scanning inside the Add product card instead of opening a
+  second dialog over the form.
+- Kept manual entry, lookup results, returned product details and catalogue or
+  stock actions visible in one continuous card.
+
 ## 0.2.6
 
 - Added camera scanning directly to the unified Add product card and routed

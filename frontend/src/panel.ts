@@ -180,6 +180,9 @@ export class DansKitchenPanel extends LitElement {
     .add-product-form { display:grid; gap:12px; }
     .barcode-field { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:end; }
     .barcode-field label { min-width:0; }
+    .inline-scanner { display:grid; gap:9px; padding:10px; border:1px solid var(--divider-color); border-radius:9px; background:var(--secondary-background-color); }
+    .inline-scanner video { display:block; width:100%; max-height:300px; border-radius:7px; background:#000; object-fit:cover; }
+    .inline-scanner .actions { justify-content:flex-end; }
     .lookup-result { padding:11px 0; border-block:1px solid var(--divider-color); }
     .lookup-result strong, .lookup-result small { display:block; }
     .add-product-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 12px; }
@@ -560,6 +563,12 @@ export class DansKitchenPanel extends LitElement {
       packageSize: "", packageUnit: "", locationId: "", quantity: "1",
       lookupStatus: "", lookupMessage: "",
     };
+  }
+
+  private closeAddProductForm(): void {
+    if (this.scannerForAddProduct) this.closeScanner();
+    this.addProductDraft = undefined;
+    this.addProductError = "";
   }
 
   private async editProduct(product: Product): Promise<void> {
@@ -1204,8 +1213,11 @@ export class DansKitchenPanel extends LitElement {
       ${this.recipeDraft ? this.renderRecipeEditor() : nothing}
       ${this.addProductDraft ? html`<dialog class="add-product-dialog" open aria-modal="true" aria-label="Add product">
         <form class="add-product-form" @submit=${(event: Event) => { event.preventDefault(); void this.lookupAddProduct(); }}>
-          <div class="section-heading"><h2>Add product</h2><button type="button" class="secondary" @click=${() => { this.addProductDraft = undefined; }}>Close</button></div>
-          <div class="barcode-field"><label>Barcode<input name="barcode" inputmode="numeric" autocomplete="off" .value=${this.addProductDraft.barcode} @input=${(event: Event) => this.updateAddProduct({ barcode: (event.currentTarget as HTMLInputElement).value })}></label><button type="submit" class="secondary" ?disabled=${this.working}>Look up</button><button type="button" class="secondary" @click=${() => this.openScanner(true)}>Scan</button></div>
+          <div class="section-heading"><h2>Add product</h2><button type="button" class="secondary" @click=${() => this.closeAddProductForm()}>Close</button></div>
+          <div class="barcode-field"><label>Barcode<input name="barcode" inputmode="numeric" autocomplete="off" .value=${this.addProductDraft.barcode} @input=${(event: Event) => this.updateAddProduct({ barcode: (event.currentTarget as HTMLInputElement).value })}></label><button type="submit" class="secondary" ?disabled=${this.working}>Look up</button><button type="button" class="secondary" @click=${() => this.scannerForAddProduct && this.scannerOpen ? this.closeScanner() : this.openScanner(true)}>${this.scannerForAddProduct && this.scannerOpen ? "Close camera" : "Scan"}</button></div>
+          ${this.scannerForAddProduct && this.scannerOpen ? html`<div class="inline-scanner">
+            ${globalThis.isSecureContext ? html`<video id="scanner-video" playsinline muted></video><div class="actions"><button type="button" class="secondary" @click=${() => this.toggleTorch()}>Toggle torch</button><button type="button" class="secondary" @click=${() => this.closeScanner()}>Close camera</button></div>` : html`<p class="error">Camera access is blocked because this Home Assistant page uses HTTP. Open Home Assistant through an HTTPS address, or use the barcode field with a USB/Bluetooth scanner.</p>`}
+          </div>` : nothing}
           ${this.addProductDraft.lookupStatus ? html`<div class="lookup-result" role="status"><small>${this.addProductDraft.lookupStatus === "existing" ? "PRODUCT ALREADY IN YOUR CATALOGUE" : this.barcodeLookupTitleFor(this.addProductDraft.lookupStatus)}</small><strong>${this.addProductDraft.name || "No product details found"}</strong><span>${this.addProductDraft.lookupMessage}</span></div>` : html`<p class="subtle">Scan with the camera, or focus the barcode field and use a USB/Bluetooth scanner. Pressing Enter looks the code up.</p>`}
           <div class="add-product-grid">
             <label class="wide">Product name<input name="name" required ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.name} @input=${(event: Event) => this.updateAddProduct({ name: (event.currentTarget as HTMLInputElement).value })}></label>
@@ -1263,7 +1275,7 @@ export class DansKitchenPanel extends LitElement {
         <label>Quantity<input id="scan-quantity" type="number" min="0.001" step="any" value=${this.scannerQuantity}></label>
         <div class="dialog-actions"><button class="secondary" @click=${() => { this.unknownBarcode = undefined; }}>Cancel</button><button @click=${() => this.registerUnknownBarcode()}>Save product and stock</button></div>
       </dialog>` : nothing}
-      ${this.scannerOpen ? html`<dialog open aria-label="Barcode scanner">
+      ${this.scannerOpen && !this.scannerForAddProduct ? html`<dialog open aria-label="Barcode scanner">
         <div class="section-heading"><div><h2>Scan a barcode</h2><p class="subtle">Camera access requires HTTPS or localhost. The rear camera is preferred.</p></div>
           <button class="secondary" @click=${() => this.closeScanner()}>Close scanner</button></div>
         ${globalThis.isSecureContext ? html`<video id="scanner-video" playsinline muted></video><div class="actions"><button class="secondary" @click=${() => this.toggleTorch()}>Toggle torch</button>${this.scannerForAddProduct ? nothing : html`<label>Quantity<input type="number" min="0.001" step="any" .value=${this.scannerQuantity} @input=${(e: Event) => { this.scannerQuantity = (e.currentTarget as HTMLInputElement).value; }}></label>`}</div>` : html`<p class="error">Camera scanning is unavailable on this HTTP address. Use Home Assistant over HTTPS, or focus the manual field and use a USB/Bluetooth scanner.</p>`}
@@ -1424,6 +1436,7 @@ export class DansKitchenPanel extends LitElement {
           reason: "Add product", request_key: `add-product-${variant.id}-${Date.now()}`,
         });
       }
+      if (this.scannerForAddProduct) this.closeScanner();
       this.addProductDraft = undefined;
       await this.reload();
       this.notice = addStock ? "Product and stock saved." : "Product saved to the catalogue.";

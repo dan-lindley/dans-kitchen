@@ -81,7 +81,13 @@ describe("application forms", () => {
     expect(form!.querySelector('[name="stock_unit"]')).toHaveProperty("required", true);
     expect(form!.textContent).toContain("Add to products");
     expect(form!.textContent).toContain("Add to stock");
-    expect([...form!.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Scan")).toBe(true);
+    const scanButton = [...form!.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Scan");
+    expect(scanButton).toBeDefined();
+    scanButton!.click();
+    await panel.updateComplete;
+    expect(form!.querySelector(".inline-scanner")).not.toBeNull();
+    expect(panel.shadowRoot!.querySelector('dialog[aria-label="Barcode scanner"]')).toBeNull();
     const addToProducts = [...form!.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Add to products");
     addToProducts!.click();
