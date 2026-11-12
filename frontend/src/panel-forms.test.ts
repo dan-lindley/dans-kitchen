@@ -74,16 +74,18 @@ describe("application forms", () => {
 
     const form = panel.shadowRoot!.querySelector('dialog[aria-label="Add product"] form');
     expect(form).not.toBeNull();
-    for (const field of ["name", "stock_unit", "reorder_level", "default_location_id"]) {
+    for (const field of ["barcode", "name", "brand_name", "product_id", "location_id", "stock_unit", "package_size", "package_unit", "quantity"]) {
       expect(form!.querySelector(`[name="${field}"]`)).not.toBeNull();
     }
     expect(form!.querySelector('[name="name"]')).toHaveProperty("required", true);
     expect(form!.querySelector('[name="stock_unit"]')).toHaveProperty("required", true);
-    expect(form!.textContent).toContain("Save");
-    expect(form!.textContent).toContain("Cancel");
-    form!.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    expect(form!.textContent).toContain("Add to products");
+    expect(form!.textContent).toContain("Add to stock");
+    const addToProducts = [...form!.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Add to products");
+    addToProducts!.click();
     await panel.updateComplete;
-    expect(form!.querySelector('[role="alert"]')?.textContent).toContain("required");
+    expect(form!.querySelector('[role="alert"]')?.textContent).toContain("generic product");
     expect(nativeDialogs.every((dialog) => dialog.mock.calls.length === 0)).toBe(true);
   });
 

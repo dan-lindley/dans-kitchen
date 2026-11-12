@@ -30,6 +30,12 @@ type FormField = {
 };
 type FormValues = Record<string, string>;
 type AppForm = { title: string; description?: string; fields: FormField[]; submitLabel?: string };
+type AddProductDraft = {
+  barcode: string; name: string; brandName: string; productId: string;
+  stockUnit: string; packageSize: string; packageUnit: string;
+  locationId: string; quantity: string; lookupStatus: string; lookupMessage: string;
+  matchedVariant?: Variant; externalSource?: string; externalSourceId?: string; imageUrl?: string;
+};
 
 declare global {
   interface Window {
@@ -80,6 +86,8 @@ export class DansKitchenPanel extends LitElement {
   @state() private databaseInfo?: Record<string, unknown>;
   @state() private appForm?: AppForm;
   @state() private appFormError = "";
+  @state() private addProductDraft?: AddProductDraft;
+  @state() private addProductError = "";
   @state() private recipeDraft?: RecipeDraft;
   @state() private recipeFormError = "";
   @state() private recipeIngredientSearch = "";
@@ -162,11 +170,25 @@ export class DansKitchenPanel extends LitElement {
     .detail-grid .wide { grid-column:1/-1; }
     dialog { color:var(--primary-text-color); background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:12px; width:min(580px, calc(100vw - 24px)); max-height:90vh; overflow:auto; padding:16px; }
     dialog.recipe-dialog { width:min(760px, calc(100vw - 24px)); max-height:calc(100vh - 32px); overflow:hidden; padding:0; }
+    dialog.add-product-dialog { width:min(700px, calc(100vw - 24px)); }
     dialog::backdrop { background:#0008; }
     .dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; margin-top:14px; }
     dialog[open] { position:fixed; inset:50% auto auto 50%; transform:translate(-50%,-50%); margin:0; box-shadow:0 12px 40px #0004; z-index:10; }
     .app-form, .recipe-form { display:grid; gap:12px; }
     .form-fields { display:grid; gap:10px; }
+    .add-product-form { display:grid; gap:12px; }
+    .barcode-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:end; }
+    .barcode-field label { min-width:0; }
+    .lookup-result { padding:11px 0; border-block:1px solid var(--divider-color); }
+    .lookup-result strong, .lookup-result small { display:block; }
+    .add-product-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 12px; }
+    .add-product-grid .wide { grid-column:1 / -1; }
+    .quantity-picker { display:flex; align-items:center; gap:8px; padding-top:10px; border-top:1px solid var(--divider-color); }
+    .quantity-picker label { margin-right:auto; }
+    .quantity-picker input { width:72px; text-align:center; }
+    .quantity-picker button { min-width:36px; border-radius:50%; }
+    .add-product-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    @media (max-width:600px) { .add-product-grid, .add-product-actions { grid-template-columns:1fr; } .add-product-grid .wide { grid-column:auto; } }
     .recipe-form { display:flex; flex-direction:column; width:100%; min-width:0; max-height:calc(100vh - 32px); gap:0; overflow:hidden; }
     .recipe-header { flex:0 0 auto; margin:0; padding:14px 18px 12px; border-bottom:1px solid var(--divider-color); }
     .recipe-content { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; padding:16px 18px; }
@@ -530,25 +552,13 @@ export class DansKitchenPanel extends LitElement {
 
   private closeProduct(): void { this.selectedProduct = undefined; this.productHistory = []; }
 
-  private async openProductForm(): Promise<void> {
-    const values = await this.requestForm("Add product", [
-      { key: "name", label: "Generic product name", type: "text", required: true },
-      { key: "stock_unit", label: "Stock unit (for example tin, bottle or kg)", type: "text", value: "item", required: true },
-      { key: "reorder_level", label: "Reorder threshold (0 disables)", type: "number", value: "0", min: 0, step: "any" },
-      this.locationField("default_location_id"),
-    ]);
-    if (!values) return;
-    this.working = true;
-    try {
-      const product = await this.request<Product>("product/create", {
-        name: values.name.trim(), stock_unit: values.stock_unit.trim(),
-        reorder_level: Number(values.reorder_level || 0), default_location_id: values.default_location_id || undefined,
-      });
-      await this.request("variant/create", { product_id: product.id });
-      await this.reload();
-      this.notice = `Added ${product.name}.`;
-    } catch (error) { this.error = this.message(error); }
-    finally { this.working = false; }
+  private openProductForm(): void {
+    this.addProductError = "";
+    this.addProductDraft = {
+      barcode: "", name: "", brandName: "", productId: "", stockUnit: "item",
+      packageSize: "", packageUnit: "", locationId: "", quantity: "1",
+      lookupStatus: "", lookupMessage: "",
+    };
   }
 
   private async editProduct(product: Product): Promise<void> {
@@ -1191,6 +1201,29 @@ export class DansKitchenPanel extends LitElement {
   private renderDialogs() {
     return html`
       ${this.recipeDraft ? this.renderRecipeEditor() : nothing}
+      ${this.addProductDraft ? html`<dialog class="add-product-dialog" open aria-modal="true" aria-label="Add product">
+        <form class="add-product-form" @submit=${(event: Event) => event.preventDefault()}>
+          <div class="section-heading"><h2>Add product</h2><button type="button" class="secondary" @click=${() => { this.addProductDraft = undefined; }}>Close</button></div>
+          <div class="barcode-field"><label>Barcode<input name="barcode" inputmode="numeric" .value=${this.addProductDraft.barcode} @input=${(event: Event) => this.updateAddProduct({ barcode: (event.currentTarget as HTMLInputElement).value })}></label><button type="button" class="secondary" ?disabled=${this.working} @click=${() => this.lookupAddProduct()}>Look up</button></div>
+          ${this.addProductDraft.lookupStatus ? html`<div class="lookup-result" role="status"><small>${this.addProductDraft.lookupStatus === "existing" ? "PRODUCT ALREADY IN YOUR CATALOGUE" : this.barcodeLookupTitleFor(this.addProductDraft.lookupStatus)}</small><strong>${this.addProductDraft.name || "No product details found"}</strong><span>${this.addProductDraft.lookupMessage}</span></div>` : html`<p class="subtle">Scan or enter a barcode to find product details, or complete the fields manually.</p>`}
+          <div class="add-product-grid">
+            <label class="wide">Product name<input name="name" required ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.name} @input=${(event: Event) => this.updateAddProduct({ name: (event.currentTarget as HTMLInputElement).value })}></label>
+            <label>Brand<input name="brand_name" ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.brandName} @input=${(event: Event) => this.updateAddProduct({ brandName: (event.currentTarget as HTMLInputElement).value })}></label>
+            <label>Generic product<select name="product_id" ?disabled=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.productId} @change=${(event: Event) => {
+              const productId = (event.currentTarget as HTMLSelectElement).value;
+              const product = this.snapshot?.inventory.find((item) => item.id === productId);
+              this.updateAddProduct({ productId, stockUnit: product?.stock_unit ?? this.addProductDraft?.stockUnit ?? "item", locationId: product?.default_location_id ?? this.addProductDraft?.locationId ?? "" });
+            }}><option value="">Create as new generic product</option>${this.snapshot?.inventory.map((product) => html`<option value=${product.id}>${product.name}</option>`)}</select></label>
+            <label>Storage location<select name="location_id" .value=${this.addProductDraft.locationId} @change=${(event: Event) => this.updateAddProduct({ locationId: (event.currentTarget as HTMLSelectElement).value })}><option value="">No location</option>${this.snapshot?.locations.map((location) => html`<option value=${location.id}>${location.name}</option>`)}</select></label>
+            <label>Stock unit<input name="stock_unit" required ?readonly=${Boolean(this.addProductDraft.productId)} .value=${this.addProductDraft.stockUnit} @input=${(event: Event) => this.updateAddProduct({ stockUnit: (event.currentTarget as HTMLInputElement).value })}></label>
+            <label>Package size<input name="package_size" type="number" min="0.001" step="any" ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.packageSize} @input=${(event: Event) => this.updateAddProduct({ packageSize: (event.currentTarget as HTMLInputElement).value })}></label>
+            <label>Package unit<input name="package_unit" ?readonly=${Boolean(this.addProductDraft.matchedVariant)} .value=${this.addProductDraft.packageUnit} @input=${(event: Event) => this.updateAddProduct({ packageUnit: (event.currentTarget as HTMLInputElement).value })}></label>
+          </div>
+          <div class="quantity-picker"><label>Quantity</label><button type="button" class="secondary" aria-label="Decrease quantity" @click=${() => this.changeAddProductQuantity(-1)}>−</button><input name="quantity" type="number" min="0.001" step="any" .value=${this.addProductDraft.quantity} @input=${(event: Event) => this.updateAddProduct({ quantity: (event.currentTarget as HTMLInputElement).value })}><button type="button" class="secondary" aria-label="Increase quantity" @click=${() => this.changeAddProductQuantity(1)}>+</button></div>
+          ${this.addProductError ? html`<p class="form-error" role="alert">${this.addProductError}</p>` : nothing}
+          <div class="add-product-actions"><button type="button" class="secondary" ?disabled=${this.working || Boolean(this.addProductDraft.matchedVariant)} @click=${() => this.saveAddProduct(false)}>${this.addProductDraft.matchedVariant ? "Already in products" : "Add to products"}</button><button type="button" ?disabled=${this.working} @click=${() => this.saveAddProduct(true)}>Add to stock</button></div>
+        </form>
+      </dialog>` : nothing}
       ${this.appForm ? html`<dialog open aria-modal="true" aria-label=${this.appForm.title}>
         <form class="app-form" novalidate @submit=${(event: Event) => this.submitAppForm(event)}>
           <div class="section-heading"><div><h2>${this.appForm.title}</h2>${this.appForm.description ? html`<p class="subtle">${this.appForm.description}</p>` : nothing}</div></div>
@@ -1295,6 +1328,108 @@ export class DansKitchenPanel extends LitElement {
     this.plannerDay = undefined;
   }
 
+  private updateAddProduct(values: Partial<AddProductDraft>): void {
+    if (this.addProductDraft) this.addProductDraft = { ...this.addProductDraft, ...values };
+  }
+
+  private async lookupAddProduct(): Promise<void> {
+    const draft = this.addProductDraft;
+    if (!draft?.barcode.trim()) { this.addProductError = "Enter a barcode to look up."; return; }
+    this.working = true;
+    this.addProductError = "";
+    try {
+      const result = await this.request<{
+        matched: boolean; variant?: Variant; product?: Record<string, unknown> | null;
+        source: string; lookup_status?: string; lookup_message?: string;
+      }>("barcode/lookup", { barcode: draft.barcode.trim() });
+      if (result.matched && result.variant) {
+        const product = this.snapshot?.inventory.find((item) => item.id === result.variant!.product_id);
+        this.updateAddProduct({
+          matchedVariant: result.variant, productId: result.variant.product_id,
+          name: product?.name ?? result.variant.product_name ?? "",
+          brandName: result.variant.brand_name ?? "",
+          packageSize: result.variant.package_size === null ? "" : String(result.variant.package_size),
+          packageUnit: result.variant.package_unit ?? "", locationId: result.variant.default_location_id ?? product?.default_location_id ?? "",
+          stockUnit: product?.stock_unit ?? draft.stockUnit, lookupStatus: "existing",
+          lookupMessage: "This barcode is already in your catalogue. Add the selected quantity to stock.",
+        });
+      } else {
+        const found = result.product ?? {};
+        this.updateAddProduct({
+          matchedVariant: undefined,
+          name: String(found.name ?? draft.name), brandName: String(found.brand_name ?? draft.brandName),
+          packageSize: found.package_size == null ? draft.packageSize : String(found.package_size),
+          packageUnit: String(found.package_unit ?? draft.packageUnit),
+          lookupStatus: result.lookup_status ?? result.source,
+          lookupMessage: result.lookup_message ?? "Review the product details below.",
+          externalSource: found.external_source ? String(found.external_source) : undefined,
+          externalSourceId: found.external_source_id ? String(found.external_source_id) : undefined,
+          imageUrl: found.image_url ? String(found.image_url) : undefined,
+        });
+      }
+    } catch (error) { this.addProductError = this.message(error); }
+    finally { this.working = false; }
+  }
+
+  private changeAddProductQuantity(change: number): void {
+    const current = Number(this.addProductDraft?.quantity) || 1;
+    this.updateAddProduct({ quantity: String(Math.max(1, current + change)) });
+  }
+
+  private async saveAddProduct(addStock: boolean): Promise<void> {
+    const draft = this.addProductDraft;
+    if (!draft) return;
+    const quantity = Number(draft.quantity);
+    if (!draft.productId && !draft.name.trim()) { this.addProductError = "Enter or select a generic product."; return; }
+    if (addStock && (!Number.isFinite(quantity) || quantity <= 0)) { this.addProductError = "Quantity must be greater than zero."; return; }
+    if (Boolean(draft.packageSize.trim()) !== Boolean(draft.packageUnit.trim())) { this.addProductError = "Enter both package size and package unit, or leave both blank."; return; }
+    this.working = true;
+    this.addProductError = "";
+    try {
+      if (draft.matchedVariant) {
+        if (!addStock) return;
+        await this.request("stock/add", {
+          variant_id: draft.matchedVariant.id, quantity, location_id: draft.locationId || undefined,
+          reason: "Barcode scan", request_key: `add-product-${draft.barcode}-${Date.now()}`,
+        });
+      } else if (addStock && draft.barcode.trim()) {
+        await this.request("barcode/register", {
+          barcode: draft.barcode.trim(), product_id: draft.productId || undefined,
+          product_name: draft.productId ? undefined : draft.name.trim(), stock_unit: draft.stockUnit.trim() || "item",
+          brand_name: draft.brandName.trim() || undefined,
+          package_size: draft.packageSize ? Number(draft.packageSize) : undefined,
+          package_unit: draft.packageSize ? draft.packageUnit.trim() : undefined,
+          default_location_id: draft.locationId || undefined, location_id: draft.locationId || undefined,
+          quantity, external_source: draft.externalSource, external_source_id: draft.externalSourceId,
+          image_url: draft.imageUrl, request_key: `add-product-${draft.barcode}-${Date.now()}`,
+        });
+      } else {
+        let productId = draft.productId;
+        if (!productId) {
+          const product = await this.request<Product>("product/create", {
+            name: draft.name.trim(), stock_unit: draft.stockUnit.trim() || "item", reorder_level: 0,
+            default_location_id: draft.locationId || undefined,
+          });
+          productId = product.id;
+        }
+        const variant = await this.request<Variant>("variant/create", {
+          product_id: productId, brand_name: draft.brandName.trim() || undefined,
+          barcode: draft.barcode.trim() || undefined,
+          package_size: draft.packageSize ? Number(draft.packageSize) : undefined,
+          package_unit: draft.packageSize ? draft.packageUnit.trim() : undefined,
+        });
+        if (addStock) await this.request("stock/add", {
+          variant_id: variant.id, quantity, location_id: draft.locationId || undefined,
+          reason: "Add product", request_key: `add-product-${variant.id}-${Date.now()}`,
+        });
+      }
+      this.addProductDraft = undefined;
+      await this.reload();
+      this.notice = addStock ? "Product and stock saved." : "Product saved to the catalogue.";
+    } catch (error) { this.addProductError = this.message(error); }
+    finally { this.working = false; }
+  }
+
   private async addBarcode(code: string): Promise<void> {
     const now = Date.now();
     if (code === this.lastBarcode && now - this.lastBarcodeAt < 2500) return;
@@ -1365,7 +1500,11 @@ export class DansKitchenPanel extends LitElement {
   }
 
   private barcodeLookupTitle(): string {
-    switch (this.unknownBarcode?.lookup_status) {
+    return this.barcodeLookupTitleFor(String(this.unknownBarcode?.lookup_status ?? ""));
+  }
+
+  private barcodeLookupTitleFor(status: string): string {
+    switch (status) {
       case "found": return "Product details found";
       case "incomplete": return "Product details incomplete";
       case "unavailable": return "External lookup unavailable";

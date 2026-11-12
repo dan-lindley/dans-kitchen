@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Replaced the separate add-product and barcode-registration prompts with one
+  responsive product card containing lookup, product and brand details,
+  generic-product assignment, storage location and quantity controls.
+- Added distinct **Add to products** and **Add to stock** actions, including
+  exact handling for barcodes already present in the catalogue.
+
 ## 0.2.4
 
 - Tightened recipe editor height to its content and increased spacing for clearer
